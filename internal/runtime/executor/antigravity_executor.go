@@ -45,7 +45,11 @@ const (
 	antigravityModelsPath          = "/v1internal:fetchAvailableModels"
 	antigravityClientID            = "1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com"
 	antigravityClientSecret        = "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"
-	defaultAntigravityAgent        = "antigravity/1.104.0 darwin/arm64"
+	defaultAntigravityAgent        = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Google-Cloud-Code/1.0"
+	antigravityAPIClient           = "google-cloud-sdk vscode_cloudshelleditor/0.1"
+	antigravityClientMetadata      = `{"ideType":"IDE_UNSPECIFIED","platform":"PLATFORM_UNSPECIFIED","pluginType":"GEMINI"}`
+	antigravityLowQuotaThreshold   = 0.10
+	antigravityLowQuotaMinCooldown = 5 * time.Minute
 	antigravityAuthType            = "antigravity"
 	refreshSkew                    = 3000 * time.Second
 	systemInstruction              = "You are Antigravity, a powerful agentic AI coding assistant designed by the Google Deepmind team working on Advanced Agentic Coding.You are pair programming with a USER to solve their coding task. The task may require creating a new codebase, modifying or debugging an existing codebase, or simply answering a question.**Absolute paths only****Proactiveness**"
@@ -125,6 +129,9 @@ func (e *AntigravityExecutor) Execute(ctx context.Context, auth *cliproxyauth.Au
 	}
 	if updatedAuth != nil {
 		auth = updatedAuth
+	}
+	if retryAfter := e.lowQuotaRetryAfter(ctx, auth, token, baseModel); retryAfter != nil {
+		return resp, statusErr{code: http.StatusTooManyRequests, msg: "antigravity quota nearing limit", retryAfter: retryAfter}
 	}
 
 	reporter := newUsageReporter(ctx, e.Identifier(), baseModel, auth)
@@ -267,6 +274,9 @@ func (e *AntigravityExecutor) executeClaudeNonStream(ctx context.Context, auth *
 	}
 	if updatedAuth != nil {
 		auth = updatedAuth
+	}
+	if retryAfter := e.lowQuotaRetryAfter(ctx, auth, token, baseModel); retryAfter != nil {
+		return resp, statusErr{code: http.StatusTooManyRequests, msg: "antigravity quota nearing limit", retryAfter: retryAfter}
 	}
 
 	reporter := newUsageReporter(ctx, e.Identifier(), baseModel, auth)
@@ -660,6 +670,9 @@ func (e *AntigravityExecutor) ExecuteStream(ctx context.Context, auth *cliproxya
 	if updatedAuth != nil {
 		auth = updatedAuth
 	}
+	if retryAfter := e.lowQuotaRetryAfter(ctx, auth, token, baseModel); retryAfter != nil {
+		return nil, statusErr{code: http.StatusTooManyRequests, msg: "antigravity quota nearing limit", retryAfter: retryAfter}
+	}
 
 	reporter := newUsageReporter(ctx, e.Identifier(), baseModel, auth)
 	defer reporter.trackFailure(ctx, &err)
@@ -920,6 +933,9 @@ func (e *AntigravityExecutor) CountTokens(ctx context.Context, auth *cliproxyaut
 		httpReq.Header.Set("Content-Type", "application/json")
 		httpReq.Header.Set("Authorization", "Bearer "+token)
 		httpReq.Header.Set("User-Agent", resolveUserAgent(auth))
+		httpReq.Header.Set("X-Goog-Api-Client", antigravityAPIClient)
+		httpReq.Header.Set("X-Goog-Client-Metadata", antigravityClientMetadata)
+		httpReq.Header.Set("Client-Metadata", antigravityClientMetadata)
 		httpReq.Header.Set("Accept", "application/json")
 		if host := resolveHost(base); host != "" {
 			httpReq.Host = host
@@ -1031,6 +1047,9 @@ func FetchAntigravityModels(ctx context.Context, auth *cliproxyauth.Auth, cfg *c
 		httpReq.Header.Set("Content-Type", "application/json")
 		httpReq.Header.Set("Authorization", "Bearer "+token)
 		httpReq.Header.Set("User-Agent", resolveUserAgent(auth))
+		httpReq.Header.Set("X-Goog-Api-Client", antigravityAPIClient)
+		httpReq.Header.Set("X-Goog-Client-Metadata", antigravityClientMetadata)
+		httpReq.Header.Set("Client-Metadata", antigravityClientMetadata)
 		if host := resolveHost(baseURL); host != "" {
 			httpReq.Host = host
 		}
@@ -1333,6 +1352,9 @@ func (e *AntigravityExecutor) buildRequest(ctx context.Context, auth *cliproxyau
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Authorization", "Bearer "+token)
 	httpReq.Header.Set("User-Agent", resolveUserAgent(auth))
+	httpReq.Header.Set("X-Goog-Api-Client", antigravityAPIClient)
+	httpReq.Header.Set("X-Goog-Client-Metadata", antigravityClientMetadata)
+	httpReq.Header.Set("Client-Metadata", antigravityClientMetadata)
 	if stream {
 		httpReq.Header.Set("Accept", "text/event-stream")
 	} else {
@@ -1477,6 +1499,101 @@ func antigravityRetryAttempts(auth *cliproxyauth.Auth, cfg *config.Config) int {
 		return 1
 	}
 	return attempts
+}
+
+func (e *AntigravityExecutor) lowQuotaRetryAfter(ctx context.Context, auth *cliproxyauth.Auth, token, model string) *time.Duration {
+	if e == nil || e.cfg == nil {
+		return nil
+	}
+	if !strings.EqualFold(strings.TrimSpace(e.cfg.Routing.Strategy), "fill-first") {
+		return nil
+	}
+	if !e.cfg.QuotaExceeded.SwitchProject {
+		return nil
+	}
+	if model == "" || token == "" {
+		return nil
+	}
+
+	remaining, resetAt, ok := antigravityRemainingQuotaFraction(ctx, auth, e.cfg, token, model)
+	if !ok || remaining > antigravityLowQuotaThreshold {
+		return nil
+	}
+
+	delay := antigravityLowQuotaMinCooldown
+	if !resetAt.IsZero() {
+		until := time.Until(resetAt)
+		if until > delay {
+			delay = until
+		}
+	}
+	if delay <= 0 {
+		delay = antigravityLowQuotaMinCooldown
+	}
+	return &delay
+}
+
+func antigravityRemainingQuotaFraction(ctx context.Context, auth *cliproxyauth.Auth, cfg *config.Config, token, model string) (float64, time.Time, bool) {
+	if auth == nil || token == "" || model == "" {
+		return 0, time.Time{}, false
+	}
+
+	baseURLs := antigravityBaseURLFallbackOrder(auth)
+	httpClient := newProxyAwareHTTPClient(ctx, cfg, auth, 0)
+
+	for _, baseURL := range baseURLs {
+		reqCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
+		httpReq, errReq := http.NewRequestWithContext(reqCtx, http.MethodPost, baseURL+antigravityModelsPath, bytes.NewReader([]byte(`{}`)))
+		if errReq != nil {
+			cancel()
+			continue
+		}
+		httpReq.Header.Set("Content-Type", "application/json")
+		httpReq.Header.Set("Authorization", "Bearer "+token)
+		httpReq.Header.Set("User-Agent", resolveUserAgent(auth))
+		httpReq.Header.Set("X-Goog-Api-Client", antigravityAPIClient)
+		httpReq.Header.Set("X-Goog-Client-Metadata", antigravityClientMetadata)
+		httpReq.Header.Set("Client-Metadata", antigravityClientMetadata)
+		if host := resolveHost(baseURL); host != "" {
+			httpReq.Host = host
+		}
+
+		httpResp, errDo := httpClient.Do(httpReq)
+		if errDo != nil {
+			cancel()
+			continue
+		}
+		bodyBytes, errRead := io.ReadAll(httpResp.Body)
+		_ = httpResp.Body.Close()
+		cancel()
+		if errRead != nil || httpResp.StatusCode < http.StatusOK || httpResp.StatusCode >= http.StatusMultipleChoices {
+			continue
+		}
+
+		modelsNode := gjson.GetBytes(bodyBytes, "models")
+		if !modelsNode.Exists() {
+			continue
+		}
+		for modelID, modelData := range modelsNode.Map() {
+			if modelID != model {
+				continue
+			}
+			remainingNode := modelData.Get("quotaInfo.remainingFraction")
+			if !remainingNode.Exists() {
+				return 0, time.Time{}, false
+			}
+			remaining := remainingNode.Float()
+			resetAt := time.Time{}
+			if reset := strings.TrimSpace(modelData.Get("quotaInfo.resetTime").String()); reset != "" {
+				if ts, errParse := time.Parse(time.RFC3339, reset); errParse == nil {
+					resetAt = ts
+				}
+			}
+			return remaining, resetAt, true
+		}
+	}
+
+	return 0, time.Time{}, false
 }
 
 func antigravityShouldRetryNoCapacity(statusCode int, body []byte) bool {
