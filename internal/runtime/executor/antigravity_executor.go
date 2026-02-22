@@ -49,10 +49,17 @@ const (
 	antigravityAPIClient           = "google-cloud-sdk vscode_cloudshelleditor/0.1"
 	antigravityClientMetadata      = `{"ideType":"IDE_UNSPECIFIED","platform":"PLATFORM_UNSPECIFIED","pluginType":"GEMINI"}`
 	antigravityLowQuotaThreshold   = 0.10
+	antigravityNearQuotaThreshold  = 0.20
 	antigravityLowQuotaMinCooldown = 5 * time.Minute
+	antigravityQuotaSummaryEvery   = 5 * time.Minute
 	antigravityAuthType            = "antigravity"
 	refreshSkew                    = 3000 * time.Second
 	systemInstruction              = "You are Antigravity, a powerful agentic AI coding assistant designed by the Google Deepmind team working on Advanced Agentic Coding.You are pair programming with a USER to solve their coding task. The task may require creating a new codebase, modifying or debugging an existing codebase, or simply answering a question.**Absolute paths only****Proactiveness**"
+)
+
+var (
+	antigravityQuotaSummaryMu   sync.Mutex
+	antigravityQuotaSummaryLast = make(map[string]time.Time)
 )
 
 var (
@@ -1516,7 +1523,22 @@ func (e *AntigravityExecutor) lowQuotaRetryAfter(ctx context.Context, auth *clip
 	}
 
 	remaining, resetAt, ok := antigravityRemainingQuotaFraction(ctx, auth, e.cfg, token, model)
-	if !ok || remaining > antigravityLowQuotaThreshold {
+	if !ok {
+		return nil
+	}
+	action := "pass"
+	if remaining <= antigravityLowQuotaThreshold {
+		action = "rotate"
+	}
+	antigravityLogQuotaSummary(auth.ID, model, remaining, resetAt, action)
+	if remaining <= antigravityNearQuotaThreshold {
+		if resetAt.IsZero() {
+			log.Debugf("antigravity quota monitor: auth=%s model=%s remaining=%.4f threshold=%.2f reset=unknown", auth.ID, model, remaining, antigravityLowQuotaThreshold)
+		} else {
+			log.Debugf("antigravity quota monitor: auth=%s model=%s remaining=%.4f threshold=%.2f reset=%s", auth.ID, model, remaining, antigravityLowQuotaThreshold, resetAt.UTC().Format(time.RFC3339))
+		}
+	}
+	if remaining > antigravityLowQuotaThreshold {
 		return nil
 	}
 
@@ -1530,7 +1552,35 @@ func (e *AntigravityExecutor) lowQuotaRetryAfter(ctx context.Context, auth *clip
 	if delay <= 0 {
 		delay = antigravityLowQuotaMinCooldown
 	}
+	if resetAt.IsZero() {
+		log.Warnf("antigravity low quota rotate: auth=%s model=%s remaining=%.4f threshold=%.2f retry_after=%s reset=unknown", auth.ID, model, remaining, antigravityLowQuotaThreshold, delay)
+	} else {
+		log.Warnf("antigravity low quota rotate: auth=%s model=%s remaining=%.4f threshold=%.2f retry_after=%s reset=%s", auth.ID, model, remaining, antigravityLowQuotaThreshold, delay, resetAt.UTC().Format(time.RFC3339))
+	}
 	return &delay
+}
+
+func antigravityLogQuotaSummary(authID, model string, remaining float64, resetAt time.Time, action string) {
+	if authID == "" || model == "" {
+		return
+	}
+	key := authID + "|" + model
+	now := time.Now()
+
+	antigravityQuotaSummaryMu.Lock()
+	last := antigravityQuotaSummaryLast[key]
+	if !last.IsZero() && now.Sub(last) < antigravityQuotaSummaryEvery {
+		antigravityQuotaSummaryMu.Unlock()
+		return
+	}
+	antigravityQuotaSummaryLast[key] = now
+	antigravityQuotaSummaryMu.Unlock()
+
+	if resetAt.IsZero() {
+		log.Infof("antigravity quota summary: auth=%s model=%s remaining=%.4f action=%s reset=unknown", authID, model, remaining, action)
+		return
+	}
+	log.Infof("antigravity quota summary: auth=%s model=%s remaining=%.4f action=%s reset=%s", authID, model, remaining, action, resetAt.UTC().Format(time.RFC3339))
 }
 
 func antigravityRemainingQuotaFraction(ctx context.Context, auth *cliproxyauth.Auth, cfg *config.Config, token, model string) (float64, time.Time, bool) {
