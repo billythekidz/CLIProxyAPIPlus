@@ -1,0 +1,3 @@
+[submodule "third_party/gemini-cli-openai"]
+	path = third_party/gemini-cli-openai
+	url = https://github.com/GewoonJaap/gemini-cli-openai
