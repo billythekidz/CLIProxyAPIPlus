@@ -82,6 +82,8 @@ server:
 # Add your provider configurations here
 ```
 
+Amp users: see `docs/amp-model-mapping-standard.md` for the ProxyPal-based mapping baseline.
+
 ### Update to Latest Version
 
 ```bash
