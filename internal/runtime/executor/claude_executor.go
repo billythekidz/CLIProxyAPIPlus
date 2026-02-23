@@ -427,10 +427,25 @@ func (e *ClaudeExecutor) CountTokens(ctx context.Context, auth *cliproxyauth.Aut
 		body = applyClaudeToolPrefix(body, claudeToolPrefix)
 	}
 
+	fallbackLocalCount := func(reason string) (cliproxyexecutor.Response, error) {
+		enc, errTok := tokenizerForModel(baseModel)
+		if errTok != nil {
+			return cliproxyexecutor.Response{}, fmt.Errorf("claude executor: tokenizer init failed: %w", errTok)
+		}
+		count, errCount := countClaudeChatTokens(enc, body)
+		if errCount != nil {
+			return cliproxyexecutor.Response{}, fmt.Errorf("claude executor: token counting failed: %w", errCount)
+		}
+		log.Warnf("claude executor: count_tokens upstream unavailable (%s), using local tokenizer fallback for model %s", reason, baseModel)
+		usageJSON := fmt.Sprintf(`{"input_tokens":%d}`, count)
+		translated := sdktranslator.TranslateTokenCount(ctx, to, from, count, []byte(usageJSON))
+		return cliproxyexecutor.Response{Payload: []byte(translated)}, nil
+	}
+
 	url := fmt.Sprintf("%s/v1/messages/count_tokens?beta=true", baseURL)
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
-		return cliproxyexecutor.Response{}, err
+		return fallbackLocalCount(err.Error())
 	}
 	applyClaudeHeaders(httpReq, auth, apiKey, false, extraBetas, e.cfg)
 	var authID, authLabel, authType, authValue string
@@ -455,7 +470,7 @@ func (e *ClaudeExecutor) CountTokens(ctx context.Context, auth *cliproxyauth.Aut
 	resp, err := httpClient.Do(httpReq)
 	if err != nil {
 		recordAPIResponseError(ctx, e.cfg, err)
-		return cliproxyexecutor.Response{}, err
+		return fallbackLocalCount(err.Error())
 	}
 	recordAPIResponseMetadata(ctx, e.cfg, resp.StatusCode, resp.Header.Clone())
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
@@ -464,7 +479,11 @@ func (e *ClaudeExecutor) CountTokens(ctx context.Context, auth *cliproxyauth.Aut
 		if errClose := resp.Body.Close(); errClose != nil {
 			log.Errorf("response body close error: %v", errClose)
 		}
-		return cliproxyexecutor.Response{}, statusErr{code: resp.StatusCode, msg: string(b)}
+		reason := fmt.Sprintf("status=%d", resp.StatusCode)
+		if len(b) > 0 {
+			reason = fmt.Sprintf("status=%d body=%s", resp.StatusCode, strings.TrimSpace(string(b)))
+		}
+		return fallbackLocalCount(reason)
 	}
 	decodedBody, err := decodeResponseBody(resp.Body, resp.Header.Get("Content-Encoding"))
 	if err != nil {
