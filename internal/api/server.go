@@ -28,6 +28,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/logging"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/managementasset"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/sidecar/geminicli"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/usage"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/util"
 	sdkaccess "github.com/router-for-me/CLIProxyAPI/v6/sdk/access"
@@ -52,6 +53,7 @@ type serverOptionConfig struct {
 	keepAliveEnabled     bool
 	keepAliveTimeout     time.Duration
 	keepAliveOnTimeout   func()
+	sidecarManager       *geminicli.Manager
 }
 
 // ServerOption customises HTTP server construction.
@@ -112,6 +114,13 @@ func WithRequestLoggerFactory(factory func(*config.Config, string) logging.Reque
 	}
 }
 
+// WithGeminiCLISidecarManager attaches the gemini-cli-openai sidecar manager for debug status endpoints.
+func WithGeminiCLISidecarManager(mgr *geminicli.Manager) ServerOption {
+	return func(cfg *serverOptionConfig) {
+		cfg.sidecarManager = mgr
+	}
+}
+
 // Server represents the main API server.
 // It encapsulates the Gin engine, HTTP server, handlers, and configuration.
 type Server struct {
@@ -155,6 +164,9 @@ type Server struct {
 
 	// ampModule is the Amp routing module for model mapping hot-reload
 	ampModule *ampmodule.AmpModule
+
+	// sidecarManager exposes gemini-cli-openai sidecar runtime status.
+	sidecarManager *geminicli.Manager
 
 	// managementRoutesRegistered tracks whether the management routes have been attached to the engine.
 	managementRoutesRegistered atomic.Bool
@@ -246,6 +258,7 @@ func NewServer(cfg *config.Config, authManager *auth.Manager, accessManager *sdk
 		currentPath:         wd,
 		envManagementSecret: envManagementSecret,
 		wsRoutes:            make(map[string]struct{}),
+		sidecarManager:      optionState.sidecarManager,
 	}
 	s.wsAuthEnabled.Store(cfg.WebsocketAuth)
 	// Save initial YAML snapshot
@@ -333,6 +346,16 @@ func (s *Server) setupRoutes() {
 		v1.GET("/responses", openaiResponsesHandlers.ResponsesWebsocket)
 		v1.POST("/responses", openaiResponsesHandlers.Responses)
 		v1.POST("/responses/compact", openaiResponsesHandlers.Compact)
+		v1.GET("/debug/providers/gemini-cli-openai", func(c *gin.Context) {
+			if s.sidecarManager == nil {
+				c.JSON(http.StatusOK, gin.H{"enabled": false})
+				return
+			}
+			c.JSON(http.StatusOK, gin.H{
+				"enabled":   true,
+				"instances": s.sidecarManager.DebugStatus(),
+			})
+		})
 	}
 
 	// Gemini compatible API routes

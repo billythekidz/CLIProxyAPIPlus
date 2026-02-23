@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -16,6 +17,7 @@ import (
 	kiroauth "github.com/router-for-me/CLIProxyAPI/v6/internal/auth/kiro"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/registry"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/runtime/executor"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/sidecar/geminicli"
 	_ "github.com/router-for-me/CLIProxyAPI/v6/internal/usage"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/watcher"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/wsrelay"
@@ -90,6 +92,9 @@ type Service struct {
 
 	// wsGateway manages websocket Gemini providers.
 	wsGateway *wsrelay.Manager
+
+	// sidecarManager manages gemini-cli-openai sidecar instances.
+	sidecarManager *geminicli.Manager
 }
 
 // RegisterUsagePlugin registers a usage plugin on the global usage manager.
@@ -519,6 +524,16 @@ func (s *Service) Run(ctx context.Context) error {
 
 	// legacy clients removed; no caches to refresh
 
+	if s.cfg != nil && s.cfg.GeminiCLIOpenAI.Enabled && strings.EqualFold(strings.TrimSpace(s.cfg.GeminiCLIOpenAI.Mode), "sidecar") {
+		sidecarPath := s.resolveGeminiCLISidecarPath()
+		mgr := geminicli.NewManager(s.cfg.GeminiCLIOpenAI, sidecarPath)
+		if errStartSidecar := mgr.StartAll(ctx); errStartSidecar != nil {
+			log.Errorf("gemini-cli-openai: failed to start sidecars: %v", errStartSidecar)
+		}
+		s.sidecarManager = mgr
+		s.serverOptions = append(s.serverOptions, api.WithGeminiCLISidecarManager(mgr))
+	}
+
 	// handlers no longer depend on legacy clients; pass nil slice initially
 	s.server = api.NewServer(s.cfg, s.coreManager, s.accessManager, s.configPath, s.serverOptions...)
 
@@ -715,6 +730,9 @@ func (s *Service) Shutdown(ctx context.Context) error {
 			s.authQueueStop()
 			s.authQueueStop = nil
 		}
+		if s.sidecarManager != nil {
+			s.sidecarManager.StopAll()
+		}
 
 		if errShutdownPprof := s.shutdownPprof(ctx); errShutdownPprof != nil {
 			log.Errorf("failed to stop pprof server: %v", errShutdownPprof)
@@ -739,6 +757,39 @@ func (s *Service) Shutdown(ctx context.Context) error {
 		usage.StopDefault()
 	})
 	return shutdownErr
+}
+
+func (s *Service) resolveGeminiCLISidecarPath() string {
+	candidates := make([]string, 0, 3)
+	if exePath, err := os.Executable(); err == nil {
+		exeDir := filepath.Dir(exePath)
+		candidates = append(candidates, filepath.Clean(filepath.Join(exeDir, "..", "third_party", "gemini-cli-openai")))
+	}
+	if wd, err := os.Getwd(); err == nil {
+		candidates = append(candidates, filepath.Join(wd, "third_party", "gemini-cli-openai"))
+	}
+	if s != nil && strings.TrimSpace(s.configPath) != "" {
+		cfgDir := filepath.Dir(s.configPath)
+		candidates = append(candidates, filepath.Join(cfgDir, "third_party", "gemini-cli-openai"))
+	}
+
+	for _, candidate := range candidates {
+		if candidate == "" {
+			continue
+		}
+		if info, err := os.Stat(candidate); err == nil && info.IsDir() {
+			return candidate
+		}
+	}
+
+	if len(candidates) > 0 {
+		log.Warnf("gemini-cli-openai: sidecar path not found, using fallback path %s", candidates[0])
+		return candidates[0]
+	}
+	if wd, err := os.Getwd(); err == nil {
+		return filepath.Join(wd, "third_party", "gemini-cli-openai")
+	}
+	return filepath.Join(string(os.PathSeparator), "tmp", "gemini-cli-openai")
 }
 
 func (s *Service) ensureAuthDir() error {
@@ -864,7 +915,7 @@ func (s *Service) registerModelsForAuth(a *coreauth.Auth) {
 		models = applyExcludedModels(models, excluded)
 	case "kimi":
 		models = registry.GetKimiModels()
-    models = applyExcludedModels(models, excluded)
+		models = applyExcludedModels(models, excluded)
 	case "github-copilot":
 		models = registry.GetGitHubCopilotModels()
 		models = applyExcludedModels(models, excluded)

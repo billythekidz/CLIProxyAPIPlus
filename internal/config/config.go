@@ -108,6 +108,9 @@ type Config struct {
 	// Used for services that use Vertex AI-style paths but with simple API key authentication.
 	VertexCompatAPIKey []VertexCompatKey `yaml:"vertex-api-key" json:"vertex-api-key"`
 
+	// GeminiCLIOpenAI configures the gemini-cli-openai sidecar provider.
+	GeminiCLIOpenAI GeminiCLIOpenAIConfig `yaml:"gemini-cli-openai" json:"gemini-cli-openai"`
+
 	// AmpCode contains Amp CLI upstream configuration, management restrictions, and model mappings.
 	AmpCode AmpCode `yaml:"ampcode" json:"ampcode"`
 
@@ -537,6 +540,30 @@ type OpenAICompatibilityModel struct {
 func (m OpenAICompatibilityModel) GetName() string  { return m.Name }
 func (m OpenAICompatibilityModel) GetAlias() string { return m.Alias }
 
+// GeminiCLIOpenAIConfig configures the gemini-cli-openai sidecar provider.
+type GeminiCLIOpenAIConfig struct {
+	Enabled             bool                      `yaml:"enabled" json:"enabled"`
+	Mode                string                    `yaml:"mode" json:"mode"` // "sidecar" or "external"
+	StartTimeout        string                    `yaml:"start-timeout,omitempty" json:"start-timeout,omitempty"`
+	HealthcheckInterval string                    `yaml:"healthcheck-interval,omitempty" json:"healthcheck-interval,omitempty"`
+	RestartPolicy       string                    `yaml:"restart-policy,omitempty" json:"restart-policy,omitempty"` // "on-failure" or "never"
+	MaxRestarts         int                       `yaml:"max-restarts,omitempty" json:"max-restarts,omitempty"`
+	CooldownOnFail      string                    `yaml:"cooldown-on-fail,omitempty" json:"cooldown-on-fail,omitempty"`
+	Instances           []GeminiCLIOpenAIInstance `yaml:"instances,omitempty" json:"instances,omitempty"`
+}
+
+// GeminiCLIOpenAIInstance defines a single gemini-cli-openai sidecar instance.
+type GeminiCLIOpenAIInstance struct {
+	ID           string `yaml:"id" json:"id"`
+	Listen       string `yaml:"listen" json:"listen"`
+	BaseURL      string `yaml:"base-url" json:"base-url"`
+	CredsFile    string `yaml:"creds-file" json:"creds-file"`
+	ProjectID    string `yaml:"project-id,omitempty" json:"project-id,omitempty"`
+	WorkerAPIKey string `yaml:"worker-api-key,omitempty" json:"worker-api-key,omitempty"`
+	Disabled     bool   `yaml:"disabled,omitempty" json:"disabled,omitempty"`
+	Weight       int    `yaml:"weight,omitempty" json:"weight,omitempty"`
+}
+
 // LoadConfig reads a YAML configuration file from the given path,
 // unmarshals it into a Config struct, applies environment variable overrides,
 // and returns it.
@@ -669,6 +696,9 @@ func LoadConfigOptional(configFile string, optional bool) (*Config, error) {
 
 	// Sanitize OpenAI compatibility providers: drop entries without base-url
 	cfg.SanitizeOpenAICompatibility()
+
+	// Sanitize Gemini CLI OpenAI sidecar provider configuration.
+	cfg.SanitizeGeminiCLIOpenAI()
 
 	// Normalize OAuth provider model exclusion map.
 	cfg.OAuthExcludedModels = NormalizeOAuthExcludedModels(cfg.OAuthExcludedModels)
@@ -821,6 +851,36 @@ func (cfg *Config) SanitizeOAuthModelAlias() {
 		}
 	}
 	cfg.OAuthModelAlias = out
+}
+
+// SanitizeGeminiCLIOpenAI normalizes gemini-cli-openai sidecar provider settings.
+func (cfg *Config) SanitizeGeminiCLIOpenAI() {
+	cfg.GeminiCLIOpenAI.Mode = strings.TrimSpace(cfg.GeminiCLIOpenAI.Mode)
+	if cfg.GeminiCLIOpenAI.Mode == "" {
+		cfg.GeminiCLIOpenAI.Mode = "sidecar"
+	}
+	if cfg.GeminiCLIOpenAI.RestartPolicy == "" {
+		cfg.GeminiCLIOpenAI.RestartPolicy = "on-failure"
+	}
+	if cfg.GeminiCLIOpenAI.MaxRestarts == 0 {
+		cfg.GeminiCLIOpenAI.MaxRestarts = 5
+	}
+	out := cfg.GeminiCLIOpenAI.Instances[:0]
+	for i := range cfg.GeminiCLIOpenAI.Instances {
+		inst := cfg.GeminiCLIOpenAI.Instances[i]
+		inst.ID = strings.TrimSpace(inst.ID)
+		inst.Listen = strings.TrimSpace(inst.Listen)
+		inst.BaseURL = strings.TrimSpace(inst.BaseURL)
+		inst.CredsFile = strings.TrimSpace(inst.CredsFile)
+		if inst.ID == "" || inst.BaseURL == "" {
+			continue
+		}
+		if inst.Weight <= 0 {
+			inst.Weight = 1
+		}
+		out = append(out, inst)
+	}
+	cfg.GeminiCLIOpenAI.Instances = out
 }
 
 // SanitizeOpenAICompatibility removes OpenAI-compatibility provider entries that are

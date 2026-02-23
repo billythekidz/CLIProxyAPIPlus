@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	kiroauth "github.com/router-for-me/CLIProxyAPI/v6/internal/auth/kiro"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/watcher/diff"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
 	log "github.com/sirupsen/logrus"
@@ -37,6 +38,8 @@ func (s *ConfigSynthesizer) Synthesize(ctx *SynthesisContext) ([]*coreauth.Auth,
 	out = append(out, s.synthesizeKiroKeys(ctx)...)
 	// OpenAI-compat
 	out = append(out, s.synthesizeOpenAICompat(ctx)...)
+	// Gemini CLI OpenAI sidecar
+	out = append(out, s.synthesizeGeminiCLIOpenAI(ctx.Config)...)
 	// Vertex-compat
 	out = append(out, s.synthesizeVertexCompat(ctx)...)
 
@@ -277,6 +280,35 @@ func (s *ConfigSynthesizer) synthesizeOpenAICompat(ctx *SynthesisContext) []*cor
 }
 
 // synthesizeVertexCompat creates Auth entries for Vertex-compatible providers.
+func (s *ConfigSynthesizer) synthesizeGeminiCLIOpenAI(cfg *config.Config) []*coreauth.Auth {
+	if cfg == nil || !cfg.GeminiCLIOpenAI.Enabled {
+		return nil
+	}
+	var auths []*coreauth.Auth
+	for _, inst := range cfg.GeminiCLIOpenAI.Instances {
+		if inst.Disabled {
+			continue
+		}
+		attrs := map[string]string{
+			"base_url":    inst.BaseURL,
+			"api_key":     inst.WorkerAPIKey,
+			"compat_name": "gemini-cli-openai",
+			"instance_id": inst.ID,
+		}
+		if inst.Weight > 0 {
+			attrs["priority"] = fmt.Sprintf("%d", inst.Weight)
+		}
+		a := &coreauth.Auth{
+			ID:         fmt.Sprintf("gemini-cli-openai-%s", inst.ID),
+			Provider:   "openai-compatible",
+			Label:      fmt.Sprintf("gemini-cli-openai/%s", inst.ID),
+			Attributes: attrs,
+		}
+		auths = append(auths, a)
+	}
+	return auths
+}
+
 func (s *ConfigSynthesizer) synthesizeVertexCompat(ctx *SynthesisContext) []*coreauth.Auth {
 	cfg := ctx.Config
 	now := ctx.Now

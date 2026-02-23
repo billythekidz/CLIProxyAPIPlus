@@ -228,6 +228,33 @@ nonstream-keepalive-interval: 0
 #       - name: "gemini-2.5-pro"
 #         alias: "vertex-pro"
 
+# Gemini CLI OpenAI sidecar provider
+# gemini-cli-openai:
+#   enabled: true
+#   mode: sidecar                    # "sidecar" (managed process) or "external" (pre-existing)
+#   start-timeout: 45s               # max time to wait for sidecar health check on startup
+#   healthcheck-interval: 20s        # interval between health checks
+#   restart-policy: on-failure       # "on-failure" or "never"
+#   max-restarts: 5                  # max restart attempts before giving up
+#   cooldown-on-fail: 2m             # cooldown period after failure before rejoining rotation
+#   instances:
+#     - id: gcli-a1                  # unique instance identifier
+#       listen: 127.0.0.1:18787     # host:port for sidecar to bind
+#       base-url: http://127.0.0.1:18787/v1  # OpenAI-compatible base URL
+#       creds-file: ~/.gemini/oauth_creds_account1.json  # path to OAuth credentials
+#       project-id: ""               # optional GCP project ID
+#       worker-api-key: ""           # optional API key for sidecar auth
+#       disabled: false
+#       weight: 1
+#     - id: gcli-a2
+#       listen: 127.0.0.1:18788
+#       base-url: http://127.0.0.1:18788/v1
+#       creds-file: ~/.gemini/oauth_creds_account2.json
+#       project-id: ""
+#       worker-api-key: ""
+#       disabled: false
+#       weight: 1
+
 # Amp Integration
 # ampcode:
 #   # Configure upstream URL for Amp CLI OAuth and management features
