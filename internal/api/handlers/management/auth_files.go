@@ -1260,7 +1260,28 @@ func (h *Handler) RequestGeminiCLIToken(c *gin.Context) {
 		}
 		fmt.Println("Authentication successful.")
 
-		if strings.EqualFold(requestedProjectID, "ALL") {
+		if requestedProjectID == "" {
+			// No project specified: default to Google One auto-discovery (personal account)
+			ts.Auto = false
+			if errSetup := performGeminiCLISetup(ctx, gemClient, &ts, ""); errSetup != nil {
+				log.Errorf("Google One auto-discovery failed: %v", errSetup)
+				SetOAuthSessionError(state, "Google One auto-discovery failed")
+				return
+			}
+			if strings.TrimSpace(ts.ProjectID) == "" {
+				log.Error("Google One auto-discovery returned empty project ID")
+				SetOAuthSessionError(state, "Google One auto-discovery returned empty project ID")
+				return
+			}
+			isChecked, errCheck := checkCloudAPIIsEnabled(ctx, gemClient, ts.ProjectID)
+			if errCheck != nil {
+				log.Errorf("Failed to verify Cloud AI API status: %v", errCheck)
+				SetOAuthSessionError(state, "Failed to verify Cloud AI API status")
+				return
+			}
+			ts.Checked = isChecked
+			log.Infof("Google One auto-discovered project: %s", ts.ProjectID)
+		} else if strings.EqualFold(requestedProjectID, "ALL") {
 			ts.Auto = false
 			projects, errAll := onboardAllGeminiProjects(ctx, gemClient, &ts)
 			if errAll != nil {

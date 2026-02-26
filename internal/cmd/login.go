@@ -107,8 +107,8 @@ func DoLogin(cfg *config.Config, projectID string, options *LoginOptions) {
 		fmt.Println("\nSelect login mode:")
 		fmt.Println("  1. Code Assist  (GCP project, manual selection)")
 		fmt.Println("  2. Google One   (personal account, auto-discover project)")
-		choice, errPrompt := promptFn("Enter choice [1/2] (default: 1): ")
-		if errPrompt == nil && strings.TrimSpace(choice) == "2" {
+		choice, errPrompt := promptFn("Enter choice [1/2] (default: 2): ")
+		if errPrompt != nil || strings.TrimSpace(choice) != "1" {
 			useGoogleOne = true
 		}
 	}
