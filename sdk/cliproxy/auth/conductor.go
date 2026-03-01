@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"path/filepath"
@@ -521,7 +522,7 @@ func (m *Manager) Execute(ctx context.Context, providers []string, req cliproxye
 		}
 	}
 	if lastErr != nil {
-		return cliproxyexecutor.Response{}, lastErr
+		return cliproxyexecutor.Response{}, wrapExhaustedError(lastErr, req.Model)
 	}
 	return cliproxyexecutor.Response{}, &Error{Code: "auth_not_found", Message: "no auth available"}
 }
@@ -552,7 +553,7 @@ func (m *Manager) ExecuteCount(ctx context.Context, providers []string, req clip
 		}
 	}
 	if lastErr != nil {
-		return cliproxyexecutor.Response{}, lastErr
+		return cliproxyexecutor.Response{}, wrapExhaustedError(lastErr, req.Model)
 	}
 	return cliproxyexecutor.Response{}, &Error{Code: "auth_not_found", Message: "no auth available"}
 }
@@ -583,7 +584,7 @@ func (m *Manager) ExecuteStream(ctx context.Context, providers []string, req cli
 		}
 	}
 	if lastErr != nil {
-		return nil, lastErr
+		return nil, wrapExhaustedError(lastErr, req.Model)
 	}
 	return nil, &Error{Code: "auth_not_found", Message: "no auth available"}
 }
@@ -634,6 +635,9 @@ func (m *Manager) executeMixedOnce(ctx context.Context, providers []string, req 
 			}
 			m.MarkResult(execCtx, result)
 			if isRequestInvalidError(errExec) {
+				return cliproxyexecutor.Response{}, errExec
+			}
+			if isRateLimitError(errExec) {
 				return cliproxyexecutor.Response{}, errExec
 			}
 			lastErr = errExec
@@ -692,6 +696,9 @@ func (m *Manager) executeCountMixedOnce(ctx context.Context, providers []string,
 			if isRequestInvalidError(errExec) {
 				return cliproxyexecutor.Response{}, errExec
 			}
+			if isRateLimitError(errExec) {
+				return cliproxyexecutor.Response{}, errExec
+			}
 			lastErr = errExec
 			continue
 		}
@@ -744,6 +751,14 @@ func (m *Manager) executeStreamMixedOnce(ctx context.Context, providers []string
 			result.RetryAfter = retryAfterFromError(errStream)
 			m.MarkResult(execCtx, result)
 			if isRequestInvalidError(errStream) {
+				return nil, errStream
+			}
+			// On 429 (rate limit / quota), stop cascading to the next auth credential.
+			// Immediately return so the outer retry loop can wait for the cooldown
+			// period before retrying. Without this, a single request burns through
+			// all available credentials in rapid succession, triggering rate limits
+			// on every account before any cooldown can expire.
+			if isRateLimitError(errStream) {
 				return nil, errStream
 			}
 			lastErr = errStream
@@ -1112,15 +1127,11 @@ func (m *Manager) retrySettings() (int, time.Duration) {
 	return int(m.requestRetry.Load()), time.Duration(m.maxRetryInterval.Load())
 }
 
-func (m *Manager) closestCooldownWait(providers []string, model string, attempt int) (time.Duration, bool) {
+func (m *Manager) closestCooldownWait(providers []string, model string, attempt int, retryBudget int) (time.Duration, bool) {
 	if m == nil || len(providers) == 0 {
 		return 0, false
 	}
 	now := time.Now()
-	defaultRetry := int(m.requestRetry.Load())
-	if defaultRetry < 0 {
-		defaultRetry = 0
-	}
 	providerSet := make(map[string]struct{}, len(providers))
 	for i := range providers {
 		key := strings.TrimSpace(strings.ToLower(providers[i]))
@@ -1143,7 +1154,7 @@ func (m *Manager) closestCooldownWait(providers []string, model string, attempt 
 		if _, ok := providerSet[providerKey]; !ok {
 			continue
 		}
-		effectiveRetry := defaultRetry
+		effectiveRetry := retryBudget
 		if override, ok := auth.RequestRetryOverride(); ok {
 			effectiveRetry = override
 		}
@@ -1169,6 +1180,79 @@ func (m *Manager) closestCooldownWait(providers []string, model string, attempt 
 	return minWait, found
 }
 
+func (m *Manager) countEligibleAuths(providers []string, model string) int {
+	if m == nil || len(providers) == 0 {
+		return 0
+	}
+	providerSet := make(map[string]struct{}, len(providers))
+	for i := range providers {
+		key := strings.TrimSpace(strings.ToLower(providers[i]))
+		if key == "" {
+			continue
+		}
+		providerSet[key] = struct{}{}
+	}
+	if len(providerSet) == 0 {
+		return 0
+	}
+
+	modelKey := strings.TrimSpace(model)
+	if modelKey != "" {
+		parsed := thinking.ParseSuffix(modelKey)
+		if parsed.ModelName != "" {
+			modelKey = strings.TrimSpace(parsed.ModelName)
+		}
+	}
+
+	registryRef := registry.GetGlobalRegistry()
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	count := 0
+	for _, candidate := range m.auths {
+		if candidate == nil || candidate.Disabled {
+			continue
+		}
+		providerKey := strings.TrimSpace(strings.ToLower(candidate.Provider))
+		if providerKey == "" {
+			continue
+		}
+		if _, ok := providerSet[providerKey]; !ok {
+			continue
+		}
+		if _, ok := m.executors[providerKey]; !ok {
+			continue
+		}
+		if modelKey != "" && registryRef != nil && !registryRef.ClientSupportsModel(candidate.ID, modelKey) {
+			continue
+		}
+		count++
+	}
+	return count
+}
+
+func (m *Manager) retryBudget(providers []string, model string) int {
+	if m == nil {
+		return 0
+	}
+	base := int(m.requestRetry.Load())
+	if base < 0 {
+		base = 0
+	}
+
+	cfg, _ := m.runtimeConfig.Load().(*internalconfig.Config)
+	if cfg == nil || !strings.EqualFold(strings.TrimSpace(cfg.Routing.Strategy), "fill-first") {
+		return base
+	}
+
+	eligible := m.countEligibleAuths(providers, model)
+	if eligible <= 0 {
+		return base
+	}
+	// In fill-first mode, retry exactly once per eligible account.
+	// Combined with the initial attempt, this allows a full cycle and one wrap.
+	return eligible
+}
+
 func (m *Manager) shouldRetryAfterError(err error, attempt int, providers []string, model string, maxWait time.Duration) (time.Duration, bool) {
 	if err == nil {
 		return 0, false
@@ -1182,7 +1266,11 @@ func (m *Manager) shouldRetryAfterError(err error, attempt int, providers []stri
 	if isRequestInvalidError(err) {
 		return 0, false
 	}
-	wait, found := m.closestCooldownWait(providers, model, attempt)
+	budget := m.retryBudget(providers, model)
+	if budget <= 0 || attempt >= budget {
+		return 0, false
+	}
+	wait, found := m.closestCooldownWait(providers, model, attempt, budget)
 	if !found || wait > maxWait {
 		return 0, false
 	}
@@ -1514,6 +1602,58 @@ func isRequestInvalidError(err error) bool {
 		return false
 	}
 	return strings.Contains(err.Error(), "invalid_request_error")
+}
+
+// isRateLimitError returns true if the error represents a 429 Too Many Requests.
+// Rate-limit errors should not cascade to the next auth credential within a single
+// executeXxxMixedOnce call because rapid-fire cascading exhausts all credentials
+// before any cooldown can expire. Instead, the outer retry loop should wait for
+// the cooldown period.
+func isRateLimitError(err error) bool {
+	if err == nil {
+		return false
+	}
+	return statusCodeFromError(err) == http.StatusTooManyRequests
+}
+
+// wrapExhaustedError replaces the error with a user-friendly message when all
+// retry attempts have been exhausted due to rate limiting.
+func wrapExhaustedError(err error, model string) error {
+	if !isRateLimitError(err) {
+		return err
+	}
+	msg := "CLIProxyAPI Model Is Not Available Now"
+	if model != "" {
+		msg = fmt.Sprintf("CLIProxyAPI Model %s Is Not Available Now", model)
+	}
+	return &exhaustedError{status: http.StatusTooManyRequests, message: msg}
+}
+
+type exhaustedError struct {
+	status  int
+	message string
+}
+
+func (e *exhaustedError) Error() string {
+	payload := map[string]any{
+		"error": map[string]any{
+			"code":    "model_unavailable",
+			"message": e.message,
+		},
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return e.message
+	}
+	return string(data)
+}
+
+func (e *exhaustedError) StatusCode() int { return e.status }
+
+func (e *exhaustedError) Headers() http.Header {
+	h := make(http.Header)
+	h.Set("Content-Type", "application/json")
+	return h
 }
 
 func applyAuthFailureState(auth *Auth, resultErr *Error, retryAfter *time.Duration, now time.Time) {

@@ -122,6 +122,81 @@ func TestFillFirstSelectorPick_PriorityFallbackCooldown(t *testing.T) {
 	}
 }
 
+func TestFillFirstSelectorPick_StickyFailover(t *testing.T) {
+	t.Parallel()
+
+	selector := &FillFirstSelector{}
+	model := "test-model"
+	now := time.Now()
+
+	a := &Auth{ID: "a"}
+	b := &Auth{ID: "b"}
+	c := &Auth{ID: "c"}
+
+	pick := func(auths []*Auth) string {
+		got, err := selector.Pick(context.Background(), "codex", model, cliproxyexecutor.Options{}, auths)
+		if err != nil {
+			t.Fatalf("Pick() error = %v", err)
+		}
+		if got == nil {
+			t.Fatalf("Pick() auth = nil")
+		}
+		return got.ID
+	}
+
+	if got := pick([]*Auth{c, a, b}); got != "a" {
+		t.Fatalf("first Pick() = %q, want %q", got, "a")
+	}
+	if got := pick([]*Auth{c, a, b}); got != "a" {
+		t.Fatalf("second Pick() = %q, want sticky %q", got, "a")
+	}
+
+	// Mark "a" unavailable; selector should fail over to "b".
+	a.ModelStates = map[string]*ModelState{
+		model: {
+			Status:         StatusActive,
+			Unavailable:    true,
+			NextRetryAfter: now.Add(5 * time.Minute),
+			Quota:          QuotaState{Exceeded: true},
+		},
+	}
+	if got := pick([]*Auth{c, a, b}); got != "b" {
+		t.Fatalf("failover Pick() = %q, want %q", got, "b")
+	}
+
+	// Even if "a" recovers, stick to "b" until "b" fails.
+	a.ModelStates = nil
+	if got := pick([]*Auth{c, a, b}); got != "b" {
+		t.Fatalf("post-recover sticky Pick() = %q, want %q", got, "b")
+	}
+
+	b.ModelStates = map[string]*ModelState{
+		model: {
+			Status:         StatusActive,
+			Unavailable:    true,
+			NextRetryAfter: now.Add(5 * time.Minute),
+			Quota:          QuotaState{Exceeded: true},
+		},
+	}
+	if got := pick([]*Auth{c, a, b}); got != "c" {
+		t.Fatalf("second failover Pick() = %q, want %q", got, "c")
+	}
+
+	// Wrap around to "a" after current "c" fails.
+	b.ModelStates = nil
+	c.ModelStates = map[string]*ModelState{
+		model: {
+			Status:         StatusActive,
+			Unavailable:    true,
+			NextRetryAfter: now.Add(5 * time.Minute),
+			Quota:          QuotaState{Exceeded: true},
+		},
+	}
+	if got := pick([]*Auth{c, a, b}); got != "a" {
+		t.Fatalf("wrap-around Pick() = %q, want %q", got, "a")
+	}
+}
+
 func TestRoundRobinSelectorPick_Concurrent(t *testing.T) {
 	selector := &RoundRobinSelector{}
 	auths := []*Auth{

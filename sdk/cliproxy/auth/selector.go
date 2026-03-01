@@ -23,10 +23,16 @@ type RoundRobinSelector struct {
 	maxKeys int
 }
 
-// FillFirstSelector selects the first available credential (deterministic ordering).
-// This "burns" one account before moving to the next, which can help stagger
-// rolling-window subscription caps (e.g. chat message limits).
-type FillFirstSelector struct{}
+// FillFirstSelector selects credentials in a sticky failover order.
+// It keeps using the current credential until it becomes unavailable, then moves
+// to the next available credential in deterministic ID order and sticks there.
+// This preserves "fill-first" behavior while avoiding immediate snap-back to the
+// first credential as soon as it recovers.
+type FillFirstSelector struct {
+	mu        sync.Mutex
+	lastByKey map[string]string
+	maxKeys   int
+}
 
 type blockReason int
 
@@ -289,7 +295,65 @@ func (s *FillFirstSelector) Pick(ctx context.Context, provider, model string, op
 		return nil, err
 	}
 	available = preferCodexWebsocketAuths(ctx, provider, available)
-	return available[0], nil
+	if len(available) == 1 {
+		s.remember(provider, model, available[0].ID)
+		return available[0], nil
+	}
+
+	key := provider + ":" + canonicalModelKey(model)
+	lastID := s.last(key)
+	if lastID != "" {
+		for i := 0; i < len(available); i++ {
+			if available[i] != nil && available[i].ID == lastID {
+				s.remember(key, "", lastID)
+				return available[i], nil
+			}
+		}
+		for i := 0; i < len(available); i++ {
+			if available[i] != nil && available[i].ID > lastID {
+				s.remember(key, "", available[i].ID)
+				return available[i], nil
+			}
+		}
+	}
+
+	chosen := available[0]
+	if chosen != nil {
+		s.remember(key, "", chosen.ID)
+	}
+	return chosen, nil
+}
+
+func (s *FillFirstSelector) last(key string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.lastByKey == nil {
+		return ""
+	}
+	return s.lastByKey[key]
+}
+
+func (s *FillFirstSelector) remember(providerOrKey, model, id string) {
+	if strings.TrimSpace(id) == "" {
+		return
+	}
+	key := providerOrKey
+	if model != "" {
+		key = providerOrKey + ":" + canonicalModelKey(model)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.lastByKey == nil {
+		s.lastByKey = make(map[string]string)
+	}
+	limit := s.maxKeys
+	if limit <= 0 {
+		limit = 4096
+	}
+	if _, ok := s.lastByKey[key]; !ok && len(s.lastByKey) >= limit {
+		s.lastByKey = make(map[string]string)
+	}
+	s.lastByKey[key] = id
 }
 
 func isAuthBlockedForModel(auth *Auth, model string, now time.Time) (bool, blockReason, time.Time) {

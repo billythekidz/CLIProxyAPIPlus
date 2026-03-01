@@ -136,3 +136,27 @@ The embedded server calls this automatically for built‑in providers; for custo
 - Toggle debug logs: Management API GET/PUT `/v0/management/debug`
 - Hot reload changes in `config.yaml` and `auths/` are picked up automatically by the watcher
 
+## Routing Strategy Notes (fill-first)
+
+`routing.strategy` controls how the auth manager chooses credentials when multiple auths can serve the same model.
+
+- `round-robin`: rotates across available credentials.
+- `fill-first`: uses one credential until it becomes unavailable, then fails over.
+
+Current `fill-first` behavior is sticky failover:
+
+- Keep using the current credential while it is healthy.
+- On cooldown/suspend/quota/limited/insufficient-balance (or other unavailability), rotate to the next available credential.
+- After rotation, keep using the new credential (do not immediately snap back to the first recovered credential).
+- Continue rotating in deterministic order and wrap to the first credential after the last one.
+
+Retry behavior in `fill-first` is dynamic per request:
+
+- Retry budget is derived from the number of eligible credentials (`N`) for the routed provider/model.
+- The manager retries enough times to walk the full set and allow one wraparound pass.
+- `max-retry-interval` still caps cooldown wait per retry attempt.
+
+Practical guidance:
+
+- For fastest failover, keep `max-retry-interval` small (for example `0-3s`).
+- `request-retry` remains useful as a fallback baseline for non-`fill-first` strategies and provider-specific overrides.
