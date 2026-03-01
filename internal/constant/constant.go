@@ -30,4 +30,7 @@ const (
 
 	// Kilo represents the Kilo AI provider identifier.
 	Kilo = "kilo"
+
+	// OpenAIEmbeddings represents the OpenAI embeddings endpoint identifier.
+	OpenAIEmbeddings = "openai-embeddings"
 )
