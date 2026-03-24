@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -176,21 +177,105 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 		}
 
 		line = bytes.TrimSpace(line[5:])
-		if gjson.GetBytes(line, "type").String() != "response.completed" {
-			continue
-		}
+		switch gjson.GetBytes(line, "type").String() {
+		case "response.completed":
+			if detail, ok := parseCodexUsage(line); ok {
+				reporter.publish(ctx, detail)
+			}
 
-		if detail, ok := parseCodexUsage(line); ok {
-			reporter.publish(ctx, detail)
+			var param any
+			out := sdktranslator.TranslateNonStream(ctx, to, from, req.Model, originalPayload, body, line, &param)
+			resp = cliproxyexecutor.Response{Payload: []byte(out), Headers: httpResp.Header.Clone()}
+			return resp, nil
+		case "response.failed", "response.incomplete":
+			status, errBody, ok := codexTerminalEventError(line)
+			if !ok {
+				break
+			}
+			err = statusErr{code: status, msg: errBody}
+			return resp, err
 		}
-
-		var param any
-		out := sdktranslator.TranslateNonStream(ctx, to, from, req.Model, originalPayload, body, line, &param)
-		resp = cliproxyexecutor.Response{Payload: []byte(out), Headers: httpResp.Header.Clone()}
-		return resp, nil
 	}
 	err = statusErr{code: 408, msg: "stream error: stream disconnected before completion: stream closed before response.completed"}
 	return resp, err
+}
+
+func codexTerminalEventError(raw []byte) (status int, body string, ok bool) {
+	eventType := gjson.GetBytes(raw, "type").String()
+	if eventType != "response.failed" && eventType != "response.incomplete" {
+		return 0, "", false
+	}
+
+	code := strings.TrimSpace(gjson.GetBytes(raw, "response.error.code").String())
+	msg := strings.TrimSpace(gjson.GetBytes(raw, "response.error.message").String())
+	if msg == "" {
+		msg = strings.TrimSpace(gjson.GetBytes(raw, "response.incomplete_details.reason").String())
+	}
+	if msg == "" {
+		msg = eventType
+	}
+
+	status = codexTerminalErrorStatus(code, msg)
+	errType := codexErrorTypeFromStatus(status)
+
+	errorPayload := map[string]any{
+		"message": msg,
+		"type":    errType,
+	}
+	if code != "" {
+		errorPayload["code"] = code
+	}
+	payload, err := json.Marshal(map[string]any{"error": errorPayload})
+	if err != nil {
+		return status, msg, true
+	}
+	return status, string(payload), true
+}
+
+func codexTerminalErrorStatus(code, message string) int {
+	lowerCode := strings.ToLower(strings.TrimSpace(code))
+	lowerMsg := strings.ToLower(strings.TrimSpace(message))
+
+	switch lowerCode {
+	case "context_length_exceeded", "invalid_request_error", "bad_request", "max_output_tokens":
+		return http.StatusBadRequest
+	case "rate_limit_exceeded", "insufficient_quota", "quota_exceeded", "billing_hard_limit_reached":
+		return http.StatusTooManyRequests
+	case "invalid_api_key", "authentication_error", "unauthorized":
+		return http.StatusUnauthorized
+	case "permission_denied", "forbidden":
+		return http.StatusForbidden
+	case "not_found", "model_not_found":
+		return http.StatusNotFound
+	case "timeout", "request_timeout", "upstream_timeout":
+		return http.StatusRequestTimeout
+	case "server_error", "internal_server_error", "overloaded":
+		return http.StatusServiceUnavailable
+	}
+
+	if strings.Contains(lowerMsg, "context window") {
+		return http.StatusBadRequest
+	}
+	if strings.Contains(lowerMsg, "rate limit") || strings.Contains(lowerMsg, "quota") {
+		return http.StatusTooManyRequests
+	}
+	return http.StatusBadRequest
+}
+
+func codexErrorTypeFromStatus(status int) string {
+	switch status {
+	case http.StatusUnauthorized:
+		return "authentication_error"
+	case http.StatusForbidden:
+		return "permission_error"
+	case http.StatusTooManyRequests:
+		return "rate_limit_error"
+	default:
+		if status >= http.StatusInternalServerError {
+			return "server_error"
+		}
+		return "invalid_request_error"
+	}
 }
 
 func (e *CodexExecutor) executeCompact(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (resp cliproxyexecutor.Response, err error) {

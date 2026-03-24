@@ -114,6 +114,10 @@ type Config struct {
 	// AmpCode contains Amp CLI upstream configuration, management restrictions, and model mappings.
 	AmpCode AmpCode `yaml:"ampcode" json:"ampcode"`
 
+	// ContextMemory controls neural-memory based context capture/reduction behavior.
+	// This section is configuration-only for now; runtime wiring is added incrementally.
+	ContextMemory ContextMemoryConfig `yaml:"context-memory" json:"context-memory"`
+
 	// OAuthExcludedModels defines per-provider global model exclusions applied to OAuth/file-backed auth entries.
 	// Supported channels: gemini-cli, vertex, aistudio, antigravity, claude, codex, qwen, iflow, kiro, github-copilot.
 	OAuthExcludedModels map[string][]string `yaml:"oauth-excluded-models,omitempty" json:"oauth-excluded-models,omitempty"`
@@ -192,6 +196,28 @@ type RoutingConfig struct {
 	// Strategy selects the credential selection strategy.
 	// Supported values: "round-robin" (default), "fill-first".
 	Strategy string `yaml:"strategy,omitempty" json:"strategy,omitempty"`
+}
+
+// ContextMemoryConfig controls neural-memory context capture/reduction feature toggles.
+type ContextMemoryConfig struct {
+	// Enabled globally toggles the feature.
+	Enabled bool `yaml:"enabled" json:"enabled"`
+
+	// ModelScope controls per-model activation.
+	ModelScope ContextMemoryModelScope `yaml:"model-scope" json:"model-scope"`
+}
+
+// ContextMemoryModelScope controls model include/exclude matching.
+type ContextMemoryModelScope struct {
+	// Default determines baseline behavior for models not matched by include/exclude.
+	// Supported values: "exclude" (default), "include".
+	Default string `yaml:"default" json:"default"`
+
+	// Include model wildcard patterns to activate when default=exclude.
+	Include []string `yaml:"include" json:"include"`
+
+	// Exclude model wildcard patterns to disable regardless of include/default.
+	Exclude []string `yaml:"exclude" json:"exclude"`
 }
 
 // OAuthModelAlias defines a model ID alias for a specific channel.
@@ -621,6 +647,10 @@ func LoadConfigOptional(configFile string, optional bool) (*Config, error) {
 	cfg.Pprof.Enable = false
 	cfg.Pprof.Addr = DefaultPprofAddr
 	cfg.AmpCode.RestrictManagementToLocalhost = false // Default to false: API key auth is sufficient
+	cfg.ContextMemory.Enabled = true
+	cfg.ContextMemory.ModelScope.Default = "exclude"
+	cfg.ContextMemory.ModelScope.Include = []string{"claude-opus-*", "claude-sonnet-*"}
+	cfg.ContextMemory.ModelScope.Exclude = []string{}
 	cfg.RemoteManagement.PanelGitHubRepository = DefaultPanelGitHubRepository
 	cfg.IncognitoBrowser = false // Default to normal browser (AWS uses incognito by force)
 	if err = yaml.Unmarshal(data, &cfg); err != nil {
@@ -706,6 +736,9 @@ func LoadConfigOptional(configFile string, optional bool) (*Config, error) {
 	// Normalize global OAuth model name aliases.
 	cfg.SanitizeOAuthModelAlias()
 
+	// Normalize context-memory model-scope settings.
+	cfg.SanitizeContextMemory()
+
 	// Validate raw payload rules and drop invalid entries.
 	cfg.SanitizePayloadRules()
 
@@ -781,6 +814,107 @@ func payloadRawString(value any) ([]byte, bool) {
 	default:
 		return nil, false
 	}
+}
+
+// SanitizeContextMemory normalizes context-memory feature settings.
+func (cfg *Config) SanitizeContextMemory() {
+	if cfg == nil {
+		return
+	}
+	scope := &cfg.ContextMemory.ModelScope
+	def := strings.ToLower(strings.TrimSpace(scope.Default))
+	if def != "include" && def != "exclude" {
+		def = "exclude"
+	}
+	scope.Default = def
+	scope.Include = sanitizeContextMemoryPatterns(scope.Include)
+	scope.Exclude = sanitizeContextMemoryPatterns(scope.Exclude)
+}
+
+// IsContextMemoryEnabledForModel reports whether context-memory should be active
+// for a model according to global toggle and model-scope include/exclude rules.
+func (cfg *Config) IsContextMemoryEnabledForModel(model string) bool {
+	if cfg == nil {
+		return false
+	}
+	if !cfg.ContextMemory.Enabled {
+		return false
+	}
+	model = strings.TrimSpace(model)
+	if model == "" {
+		return false
+	}
+	for i := range cfg.ContextMemory.ModelScope.Exclude {
+		if matchSimpleWildcard(cfg.ContextMemory.ModelScope.Exclude[i], model) {
+			return false
+		}
+	}
+	for i := range cfg.ContextMemory.ModelScope.Include {
+		if matchSimpleWildcard(cfg.ContextMemory.ModelScope.Include[i], model) {
+			return true
+		}
+	}
+	return cfg.ContextMemory.ModelScope.Default == "include"
+}
+
+func sanitizeContextMemoryPatterns(patterns []string) []string {
+	if len(patterns) == 0 {
+		return []string{}
+	}
+	out := make([]string, 0, len(patterns))
+	seen := make(map[string]struct{}, len(patterns))
+	for i := range patterns {
+		pattern := strings.ToLower(strings.TrimSpace(patterns[i]))
+		if pattern == "" {
+			continue
+		}
+		if _, ok := seen[pattern]; ok {
+			continue
+		}
+		seen[pattern] = struct{}{}
+		out = append(out, pattern)
+	}
+	return out
+}
+
+// matchSimpleWildcard matches pattern against value using case-insensitive '*'
+// wildcard where '*' matches zero or more characters.
+func matchSimpleWildcard(pattern, value string) bool {
+	pattern = strings.ToLower(strings.TrimSpace(pattern))
+	value = strings.ToLower(strings.TrimSpace(value))
+	if pattern == "" || value == "" {
+		return false
+	}
+	if pattern == "*" {
+		return true
+	}
+	pi, si := 0, 0
+	starIdx := -1
+	matchIdx := 0
+	for si < len(value) {
+		if pi < len(pattern) && pattern[pi] == value[si] {
+			pi++
+			si++
+			continue
+		}
+		if pi < len(pattern) && pattern[pi] == '*' {
+			starIdx = pi
+			matchIdx = si
+			pi++
+			continue
+		}
+		if starIdx != -1 {
+			pi = starIdx + 1
+			matchIdx++
+			si = matchIdx
+			continue
+		}
+		return false
+	}
+	for pi < len(pattern) && pattern[pi] == '*' {
+		pi++
+	}
+	return pi == len(pattern)
 }
 
 // SanitizeOAuthModelAlias normalizes and deduplicates global OAuth model name aliases.

@@ -188,6 +188,21 @@ func ApplyThinking(body []byte, model string, fromFormat string, toFormat string
 		return body, nil
 	}
 
+	// GPT-family requests become noticeably slower at xhigh. Clamp them to high
+	// so upstream clients asking for xhigh still get a bounded reasoning level.
+	if strings.HasPrefix(strings.ToLower(baseModel), "gpt-") {
+		switch validated.Mode {
+		case ModeLevel:
+			if validated.Level == LevelXHigh {
+				validated.Level = LevelHigh
+			}
+		case ModeBudget:
+			if validated.Budget > ThresholdHigh {
+				validated.Budget = ThresholdHigh
+			}
+		}
+	}
+
 	log.WithFields(log.Fields{
 		"provider": providerFormat,
 		"model":    modelInfo.ID,

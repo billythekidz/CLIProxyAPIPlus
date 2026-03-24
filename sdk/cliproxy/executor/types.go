@@ -19,6 +19,18 @@ const (
 	SelectedAuthCallbackMetadataKey = "selected_auth_callback"
 	// ExecutionSessionMetadataKey identifies a long-lived downstream execution session.
 	ExecutionSessionMetadataKey = "execution_session_id"
+	// ContextMemoryEnabledMetadataKey marks that context-memory preprocessing was evaluated.
+	ContextMemoryEnabledMetadataKey = "context_memory_enabled"
+	// ContextMemoryAppliedMetadataKey marks that request payload reduction was applied.
+	ContextMemoryAppliedMetadataKey = "context_memory_applied"
+	// ContextMemoryTokensBeforeMetadataKey stores pre-reduction token estimate.
+	ContextMemoryTokensBeforeMetadataKey = "context_memory_tokens_before"
+	// ContextMemoryTokensAfterMetadataKey stores post-reduction token estimate.
+	ContextMemoryTokensAfterMetadataKey = "context_memory_tokens_after"
+	// ContextMemoryDroppedMetadataKey stores number of dropped blocks.
+	ContextMemoryDroppedMetadataKey = "context_memory_dropped"
+	// ContextMemoryTrimmedMetadataKey stores number of trimmed blocks.
+	ContextMemoryTrimmedMetadataKey = "context_memory_trimmed"
 )
 
 // Request encapsulates the translated payload that will be sent to a provider executor.

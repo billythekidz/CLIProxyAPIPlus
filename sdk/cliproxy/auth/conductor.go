@@ -503,6 +503,7 @@ func (m *Manager) Execute(ctx context.Context, providers []string, req cliproxye
 	if len(normalized) == 0 {
 		return cliproxyexecutor.Response{}, &Error{Code: "provider_not_found", Message: "no provider supplied"}
 	}
+	req, opts = m.applyContextMemoryPreExecutor(ctx, req, opts)
 
 	_, maxWait := m.retrySettings()
 
@@ -534,6 +535,7 @@ func (m *Manager) ExecuteCount(ctx context.Context, providers []string, req clip
 	if len(normalized) == 0 {
 		return cliproxyexecutor.Response{}, &Error{Code: "provider_not_found", Message: "no provider supplied"}
 	}
+	req, opts = m.applyContextMemoryPreExecutor(ctx, req, opts)
 
 	_, maxWait := m.retrySettings()
 
@@ -565,6 +567,7 @@ func (m *Manager) ExecuteStream(ctx context.Context, providers []string, req cli
 	if len(normalized) == 0 {
 		return nil, &Error{Code: "provider_not_found", Message: "no provider supplied"}
 	}
+	req, opts = m.applyContextMemoryPreExecutor(ctx, req, opts)
 
 	_, maxWait := m.retrySettings()
 
@@ -637,9 +640,6 @@ func (m *Manager) executeMixedOnce(ctx context.Context, providers []string, req 
 			if isRequestInvalidError(errExec) {
 				return cliproxyexecutor.Response{}, errExec
 			}
-			if isRateLimitError(errExec) {
-				return cliproxyexecutor.Response{}, errExec
-			}
 			lastErr = errExec
 			continue
 		}
@@ -696,9 +696,6 @@ func (m *Manager) executeCountMixedOnce(ctx context.Context, providers []string,
 			if isRequestInvalidError(errExec) {
 				return cliproxyexecutor.Response{}, errExec
 			}
-			if isRateLimitError(errExec) {
-				return cliproxyexecutor.Response{}, errExec
-			}
 			lastErr = errExec
 			continue
 		}
@@ -751,14 +748,6 @@ func (m *Manager) executeStreamMixedOnce(ctx context.Context, providers []string
 			result.RetryAfter = retryAfterFromError(errStream)
 			m.MarkResult(execCtx, result)
 			if isRequestInvalidError(errStream) {
-				return nil, errStream
-			}
-			// On 429 (rate limit / quota), stop cascading to the next auth credential.
-			// Immediately return so the outer retry loop can wait for the cooldown
-			// period before retrying. Without this, a single request burns through
-			// all available credentials in rapid succession, triggering rate limits
-			// on every account before any cooldown can expire.
-			if isRateLimitError(errStream) {
 				return nil, errStream
 			}
 			lastErr = errStream
@@ -1376,12 +1365,9 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 					shouldSuspendModel = true
 					setModelQuota = true
 				case 408, 500, 502, 503, 504:
-					if quotaCooldownDisabledForAuth(auth) {
-						state.NextRetryAfter = time.Time{}
-					} else {
-						next := now.Add(1 * time.Minute)
-						state.NextRetryAfter = next
-					}
+					// Do not place transient upstream failures into cooldown.
+					// This allows immediate account rotation on the next selection pass.
+					state.NextRetryAfter = time.Time{}
 				default:
 					state.NextRetryAfter = time.Time{}
 				}
@@ -1579,7 +1565,8 @@ func retryAfterFromError(err error) *time.Duration {
 	if retryAfter == nil {
 		return nil
 	}
-	return new(*retryAfter)
+	value := *retryAfter
+	return &value
 }
 
 func statusCodeFromResult(err *Error) int {
@@ -1698,11 +1685,8 @@ func applyAuthFailureState(auth *Auth, resultErr *Error, retryAfter *time.Durati
 		auth.NextRetryAfter = next
 	case 408, 500, 502, 503, 504:
 		auth.StatusMessage = "transient upstream error"
-		if quotaCooldownDisabledForAuth(auth) {
-			auth.NextRetryAfter = time.Time{}
-		} else {
-			auth.NextRetryAfter = now.Add(1 * time.Minute)
-		}
+		// Keep auth immediately eligible so account switching can happen instantly.
+		auth.NextRetryAfter = time.Time{}
 	default:
 		if auth.StatusMessage == "" {
 			auth.StatusMessage = "request failed"

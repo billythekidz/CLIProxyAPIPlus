@@ -1,3 +1,6 @@
 [submodule "third_party/gemini-cli-openai"]
 	path = third_party/gemini-cli-openai
 	url = https://github.com/GewoonJaap/gemini-cli-openai
+[submodule "features/neural-memory-context/neural-memory"]
+	path = features/neural-memory-context/neural-memory
+	url = https://github.com/nhadaututtheky/neural-memory
