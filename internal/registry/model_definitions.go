@@ -1,11 +1,185 @@
 // Package registry provides model definitions and lookup helpers for various AI providers.
-// Static model metadata is stored in model_definitions_static_data.go.
+// Static model metadata is loaded from the embedded models.json file and can be refreshed from network.
 package registry
 
 import (
-	"sort"
 	"strings"
 )
+
+// staticModelsJSON mirrors the top-level structure of models.json.
+type staticModelsJSON struct {
+	Claude      []*ModelInfo `json:"claude"`
+	Gemini      []*ModelInfo `json:"gemini"`
+	Vertex      []*ModelInfo `json:"vertex"`
+	GeminiCLI   []*ModelInfo `json:"gemini-cli"`
+	AIStudio    []*ModelInfo `json:"aistudio"`
+	CodexFree   []*ModelInfo `json:"codex-free"`
+	CodexTeam   []*ModelInfo `json:"codex-team"`
+	CodexPlus   []*ModelInfo `json:"codex-plus"`
+	CodexPro    []*ModelInfo `json:"codex-pro"`
+	Qwen        []*ModelInfo `json:"qwen"`
+	IFlow       []*ModelInfo `json:"iflow"`
+	Kimi        []*ModelInfo `json:"kimi"`
+	Antigravity []*ModelInfo `json:"antigravity"`
+}
+
+// GetClaudeModels returns the standard Claude model definitions.
+func GetClaudeModels() []*ModelInfo {
+	return cloneModelInfos(getModels().Claude)
+}
+
+// GetGeminiModels returns the standard Gemini model definitions.
+func GetGeminiModels() []*ModelInfo {
+	return cloneModelInfos(getModels().Gemini)
+}
+
+// GetGeminiVertexModels returns Gemini model definitions for Vertex AI.
+func GetGeminiVertexModels() []*ModelInfo {
+	return cloneModelInfos(getModels().Vertex)
+}
+
+// GetGeminiCLIModels returns Gemini model definitions for the Gemini CLI.
+func GetGeminiCLIModels() []*ModelInfo {
+	return cloneModelInfos(getModels().GeminiCLI)
+}
+
+// GetAIStudioModels returns model definitions for AI Studio.
+func GetAIStudioModels() []*ModelInfo {
+	return cloneModelInfos(getModels().AIStudio)
+}
+
+// GetCodexFreeModels returns model definitions for the Codex free plan tier.
+func GetCodexFreeModels() []*ModelInfo {
+	return cloneModelInfos(getModels().CodexFree)
+}
+
+// GetCodexTeamModels returns model definitions for the Codex team plan tier.
+func GetCodexTeamModels() []*ModelInfo {
+	return cloneModelInfos(getModels().CodexTeam)
+}
+
+// GetCodexPlusModels returns model definitions for the Codex plus plan tier.
+func GetCodexPlusModels() []*ModelInfo {
+	return cloneModelInfos(getModels().CodexPlus)
+}
+
+// GetCodexProModels returns model definitions for the Codex pro plan tier.
+func GetCodexProModels() []*ModelInfo {
+	return cloneModelInfos(getModels().CodexPro)
+}
+
+// GetQwenModels returns the standard Qwen model definitions.
+func GetQwenModels() []*ModelInfo {
+	return cloneModelInfos(getModels().Qwen)
+}
+
+// GetIFlowModels returns the standard iFlow model definitions.
+func GetIFlowModels() []*ModelInfo {
+	return cloneModelInfos(getModels().IFlow)
+}
+
+// GetKimiModels returns the standard Kimi (Moonshot AI) model definitions.
+func GetKimiModels() []*ModelInfo {
+	return cloneModelInfos(getModels().Kimi)
+}
+
+// GetAntigravityModels returns the standard Antigravity model definitions.
+func GetAntigravityModels() []*ModelInfo {
+	return cloneModelInfos(getModels().Antigravity)
+}
+
+// GetCodeBuddyModels returns the available models for CodeBuddy (Tencent).
+// These models are served through the copilot.tencent.com API.
+func GetCodeBuddyModels() []*ModelInfo {
+	now := int64(1748044800) // 2025-05-24
+	return []*ModelInfo{
+		{
+			ID:                  "glm-5.0",
+			Object:              "model",
+			Created:             now,
+			OwnedBy:             "tencent",
+			Type:                "codebuddy",
+			DisplayName:         "GLM-5.0",
+			Description:         "GLM-5.0 via CodeBuddy",
+			ContextLength:       128000,
+			MaxCompletionTokens: 32768,
+			SupportedEndpoints:  []string{"/chat/completions"},
+		},
+		{
+			ID:                  "glm-4.7",
+			Object:              "model",
+			Created:             now,
+			OwnedBy:             "tencent",
+			Type:                "codebuddy",
+			DisplayName:         "GLM-4.7",
+			Description:         "GLM-4.7 via CodeBuddy",
+			ContextLength:       128000,
+			MaxCompletionTokens: 32768,
+			SupportedEndpoints:  []string{"/chat/completions"},
+		},
+		{
+			ID:                  "minimax-m2.5",
+			Object:              "model",
+			Created:             now,
+			OwnedBy:             "tencent",
+			Type:                "codebuddy",
+			DisplayName:         "MiniMax M2.5",
+			Description:         "MiniMax M2.5 via CodeBuddy",
+			ContextLength:       200000,
+			MaxCompletionTokens: 32768,
+			SupportedEndpoints:  []string{"/chat/completions"},
+		},
+		{
+			ID:                  "kimi-k2.5",
+			Object:              "model",
+			Created:             now,
+			OwnedBy:             "tencent",
+			Type:                "codebuddy",
+			DisplayName:         "Kimi K2.5",
+			Description:         "Kimi K2.5 via CodeBuddy",
+			ContextLength:       128000,
+			MaxCompletionTokens: 32768,
+			SupportedEndpoints:  []string{"/chat/completions"},
+		},
+		{
+			ID:                  "deepseek-v3-2-volc",
+			Object:              "model",
+			Created:             now,
+			OwnedBy:             "tencent",
+			Type:                "codebuddy",
+			DisplayName:         "DeepSeek V3.2 (Volc)",
+			Description:         "DeepSeek V3.2 via CodeBuddy (Volcano Engine)",
+			ContextLength:       128000,
+			MaxCompletionTokens: 32768,
+			SupportedEndpoints:  []string{"/chat/completions"},
+		},
+		{
+			ID:                  "hunyuan-2.0-thinking",
+			Object:              "model",
+			Created:             now,
+			OwnedBy:             "tencent",
+			Type:                "codebuddy",
+			DisplayName:         "Hunyuan 2.0 Thinking",
+			Description:         "Tencent Hunyuan 2.0 Thinking via CodeBuddy",
+			ContextLength:       128000,
+			MaxCompletionTokens: 32768,
+			Thinking:            &ThinkingSupport{ZeroAllowed: true},
+			SupportedEndpoints:  []string{"/chat/completions"},
+		},
+	}
+}
+
+// cloneModelInfos returns a shallow copy of the slice with each element deep-cloned.
+func cloneModelInfos(models []*ModelInfo) []*ModelInfo {
+	if len(models) == 0 {
+		return nil
+	}
+	out := make([]*ModelInfo, len(models))
+	for i, m := range models {
+		out[i] = cloneModelInfo(m)
+	}
+	return out
+}
 
 // GetStaticModelDefinitionsByChannel returns static model definitions for a given channel/provider.
 // It returns nil when the channel is unknown.
@@ -20,10 +194,8 @@ import (
 //   - qwen
 //   - iflow
 //   - kimi
-//   - kiro
 //   - kilo
 //   - github-copilot
-//   - kiro
 //   - amazonq
 //   - antigravity (returns static overrides only)
 func GetStaticModelDefinitionsByChannel(channel string) []*ModelInfo {
@@ -40,7 +212,7 @@ func GetStaticModelDefinitionsByChannel(channel string) []*ModelInfo {
 	case "aistudio":
 		return GetAIStudioModels()
 	case "codex":
-		return GetOpenAIModels()
+		return GetCodexProModels()
 	case "qwen":
 		return GetQwenModels()
 	case "iflow":
@@ -56,28 +228,9 @@ func GetStaticModelDefinitionsByChannel(channel string) []*ModelInfo {
 	case "amazonq":
 		return GetAmazonQModels()
 	case "antigravity":
-		cfg := GetAntigravityModelConfig()
-		if len(cfg) == 0 {
-			return nil
-		}
-		models := make([]*ModelInfo, 0, len(cfg))
-		for modelID, entry := range cfg {
-			if modelID == "" || entry == nil {
-				continue
-			}
-			models = append(models, &ModelInfo{
-				ID:                  modelID,
-				Object:              "model",
-				OwnedBy:             "antigravity",
-				Type:                "antigravity",
-				Thinking:            entry.Thinking,
-				MaxCompletionTokens: entry.MaxCompletionTokens,
-			})
-		}
-		sort.Slice(models, func(i, j int) bool {
-			return strings.ToLower(models[i].ID) < strings.ToLower(models[j].ID)
-		})
-		return models
+		return GetAntigravityModels()
+	case "codebuddy":
+		return GetCodeBuddyModels()
 	default:
 		return nil
 	}
@@ -90,35 +243,29 @@ func LookupStaticModelInfo(modelID string) *ModelInfo {
 		return nil
 	}
 
+	data := getModels()
 	allModels := [][]*ModelInfo{
-		GetClaudeModels(),
-		GetGeminiModels(),
-		GetGeminiVertexModels(),
-		GetGeminiCLIModels(),
-		GetAIStudioModels(),
-		GetOpenAIModels(),
-		GetQwenModels(),
-		GetIFlowModels(),
-		GetKimiModels(),
+		data.Claude,
+		data.Gemini,
+		data.Vertex,
+		data.GeminiCLI,
+		data.AIStudio,
+		data.CodexPro,
+		data.Qwen,
+		data.IFlow,
+		data.Kimi,
+		data.Antigravity,
 		GetGitHubCopilotModels(),
 		GetKiroModels(),
 		GetKiloModels(),
 		GetAmazonQModels(),
+		GetCodeBuddyModels(),
 	}
 	for _, models := range allModels {
 		for _, m := range models {
 			if m != nil && m.ID == modelID {
-				return m
+				return cloneModelInfo(m)
 			}
-		}
-	}
-
-	// Check Antigravity static config
-	if cfg := GetAntigravityModelConfig()[modelID]; cfg != nil {
-		return &ModelInfo{
-			ID:                  modelID,
-			Thinking:            cfg.Thinking,
-			MaxCompletionTokens: cfg.MaxCompletionTokens,
 		}
 	}
 
@@ -152,6 +299,7 @@ func GetGitHubCopilotModels() []*ModelInfo {
 			Description:         "OpenAI GPT-4.1 via GitHub Copilot",
 			ContextLength:       128000,
 			MaxCompletionTokens: 16384,
+			SupportedEndpoints:  []string{"/chat/completions", "/responses"},
 		},
 	}
 
@@ -166,6 +314,7 @@ func GetGitHubCopilotModels() []*ModelInfo {
 			Description:         entry.Description,
 			ContextLength:       128000,
 			MaxCompletionTokens: 16384,
+			SupportedEndpoints:  []string{"/chat/completions", "/responses"},
 		})
 	}
 
@@ -295,6 +444,19 @@ func GetGitHubCopilotModels() []*ModelInfo {
 			Type:                "github-copilot",
 			DisplayName:         "GPT-5.3 Codex",
 			Description:         "OpenAI GPT-5.3 Codex via GitHub Copilot",
+			ContextLength:       200000,
+			MaxCompletionTokens: 32768,
+			SupportedEndpoints:  []string{"/responses"},
+			Thinking:            &ThinkingSupport{Levels: []string{"none", "low", "medium", "high", "xhigh"}},
+		},
+		{
+			ID:                  "gpt-5.4",
+			Object:              "model",
+			Created:             now,
+			OwnedBy:             "github-copilot",
+			Type:                "github-copilot",
+			DisplayName:         "GPT-5.4",
+			Description:         "OpenAI GPT-5.4 via GitHub Copilot",
 			ContextLength:       200000,
 			MaxCompletionTokens: 32768,
 			SupportedEndpoints:  []string{"/responses"},
@@ -694,6 +856,42 @@ func GetKiroModels() []*ModelInfo {
 			Description:         "Claude Haiku 4.5 optimized for coding agents (chunked writes)",
 			ContextLength:       200000,
 			MaxCompletionTokens: 64000,
+			Thinking:            &ThinkingSupport{Min: 1024, Max: 32000, ZeroAllowed: true, DynamicAllowed: true},
+		},
+		{
+			ID:                  "kiro-deepseek-3-2-agentic",
+			Object:              "model",
+			Created:             1732752000,
+			OwnedBy:             "aws",
+			Type:                "kiro",
+			DisplayName:         "Kiro DeepSeek 3.2 (Agentic)",
+			Description:         "DeepSeek 3.2 optimized for coding agents (chunked writes)",
+			ContextLength:       128000,
+			MaxCompletionTokens: 32768,
+			Thinking:            &ThinkingSupport{Min: 1024, Max: 32000, ZeroAllowed: true, DynamicAllowed: true},
+		},
+		{
+			ID:                  "kiro-minimax-m2-1-agentic",
+			Object:              "model",
+			Created:             1732752000,
+			OwnedBy:             "aws",
+			Type:                "kiro",
+			DisplayName:         "Kiro MiniMax M2.1 (Agentic)",
+			Description:         "MiniMax M2.1 optimized for coding agents (chunked writes)",
+			ContextLength:       200000,
+			MaxCompletionTokens: 64000,
+			Thinking:            &ThinkingSupport{Min: 1024, Max: 32000, ZeroAllowed: true, DynamicAllowed: true},
+		},
+		{
+			ID:                  "kiro-qwen3-coder-next-agentic",
+			Object:              "model",
+			Created:             1732752000,
+			OwnedBy:             "aws",
+			Type:                "kiro",
+			DisplayName:         "Kiro Qwen3 Coder Next (Agentic)",
+			Description:         "Qwen3 Coder Next optimized for coding agents (chunked writes)",
+			ContextLength:       128000,
+			MaxCompletionTokens: 32768,
 			Thinking:            &ThinkingSupport{Min: 1024, Max: 32000, ZeroAllowed: true, DynamicAllowed: true},
 		},
 	}

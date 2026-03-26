@@ -49,15 +49,8 @@ const (
 	ErrStreamFatal     = "fatal"     // Connection/authentication errors, not recoverable
 	ErrStreamMalformed = "malformed" // Format errors, data cannot be parsed
 
-	// kiroUserAgent matches Amazon Q CLI style for User-Agent header
-	kiroUserAgent = "aws-sdk-rust/1.3.9 os/macos lang/rust/1.87.0"
-	// kiroFullUserAgent is the complete x-amz-user-agent header (Amazon Q CLI style)
-	kiroFullUserAgent = "aws-sdk-rust/1.3.9 ua/2.1 api/ssooidc/1.88.0 os/macos lang/rust/1.87.0 m/E app/AmazonQ-For-CLI"
-
-	// Kiro IDE style headers for IDC auth
-	kiroIDEUserAgent     = "aws-sdk-js/1.0.27 ua/2.1 os/win32#10.0.19044 lang/js md/nodejs#22.21.1 api/codewhispererstreaming#1.0.27 m/E"
-	kiroIDEAmzUserAgent  = "aws-sdk-js/1.0.27"
-	kiroIDEAgentModeVibe = "vibe"
+	// kiroIDEAgentMode is the agent mode header value for Kiro IDE requests
+	kiroIDEAgentMode = "vibe"
 
 	// Socket retry configuration constants
 	// Maximum number of retry attempts for socket/network errors
@@ -87,20 +80,20 @@ var (
 	usageUpdateTimeInterval  = 15 * time.Second // Or every 15 seconds, whichever comes first
 )
 
-// Global FingerprintManager for dynamic User-Agent generation per token
-// Each token gets a unique fingerprint on first use, which is cached for subsequent requests
-var (
-	globalFingerprintManager     *kiroauth.FingerprintManager
-	globalFingerprintManagerOnce sync.Once
-)
+// endpointAliases maps user preference values to canonical endpoint names.
+var endpointAliases = map[string]string{
+	"codewhisperer": "codewhisperer",
+	"ide":           "codewhisperer",
+	"amazonq":       "amazonq",
+	"q":             "amazonq",
+	"cli":           "amazonq",
+}
 
-// getGlobalFingerprintManager returns the global FingerprintManager instance
-func getGlobalFingerprintManager() *kiroauth.FingerprintManager {
-	globalFingerprintManagerOnce.Do(func() {
-		globalFingerprintManager = kiroauth.NewFingerprintManager()
-		log.Infof("kiro: initialized global FingerprintManager for dynamic UA generation")
-	})
-	return globalFingerprintManager
+func enqueueTranslatedSSE(out chan<- cliproxyexecutor.StreamChunk, chunk []byte) {
+	if len(chunk) == 0 {
+		return
+	}
+	out <- cliproxyexecutor.StreamChunk{Payload: append(bytes.Clone(chunk), '\n', '\n')}
 }
 
 // retryConfig holds configuration for socket retry logic.
@@ -433,87 +426,41 @@ func getKiroEndpointConfigs(auth *cliproxyauth.Auth) []kiroEndpointConfig {
 		return kiroEndpointConfigs
 	}
 
-	// Determine API region using shared resolution logic
 	region := resolveKiroAPIRegion(auth)
+	log.Debugf("kiro: using region %s", region)
 
-	// Build endpoint configs for the specified region
-	endpointConfigs := buildKiroEndpointConfigs(region)
+	configs := buildKiroEndpointConfigs(region)
 
-	// For IDC auth, use Q endpoint with AI_EDITOR origin
-	// IDC tokens work with Q endpoint using Bearer auth
-	// The difference is only in how tokens are refreshed (OIDC with clientId/clientSecret for IDC)
-	// NOT in how API calls are made - both Social and IDC use the same endpoint/origin
-	if auth.Metadata != nil {
-		authMethod, _ := auth.Metadata["auth_method"].(string)
-		if strings.ToLower(authMethod) == "idc" {
-			log.Debugf("kiro: IDC auth, using Q endpoint (region: %s)", region)
-			return endpointConfigs
-		}
-	}
-
-	// Check for preference
-	var preference string
-	if auth.Metadata != nil {
-		if p, ok := auth.Metadata["preferred_endpoint"].(string); ok {
-			preference = p
-		}
-	}
-	// Check attributes as fallback (e.g. from HTTP headers)
-	if preference == "" && auth.Attributes != nil {
-		preference = auth.Attributes["preferred_endpoint"]
-	}
-
+	preference := getAuthValue(auth, "preferred_endpoint")
 	if preference == "" {
-		return endpointConfigs
+		return configs
 	}
 
-	preference = strings.ToLower(strings.TrimSpace(preference))
+	targetName, ok := endpointAliases[preference]
+	if !ok {
+		return configs
+	}
 
-	// Create new slice to avoid modifying global state
-	var sorted []kiroEndpointConfig
-	var remaining []kiroEndpointConfig
-
-	for _, cfg := range endpointConfigs {
-		name := strings.ToLower(cfg.Name)
-		// Check for matches
-		// CodeWhisperer aliases: codewhisperer, ide
-		// AmazonQ aliases: amazonq, q, cli
-		isMatch := false
-		if (preference == "codewhisperer" || preference == "ide") && name == "codewhisperer" {
-			isMatch = true
-		} else if (preference == "amazonq" || preference == "q" || preference == "cli") && name == "amazonq" {
-			isMatch = true
-		}
-
-		if isMatch {
-			sorted = append(sorted, cfg)
+	var preferred, others []kiroEndpointConfig
+	for _, cfg := range configs {
+		if strings.ToLower(cfg.Name) == targetName {
+			preferred = append(preferred, cfg)
 		} else {
-			remaining = append(remaining, cfg)
+			others = append(others, cfg)
 		}
 	}
 
-	// If preference didn't match anything, return default
-	if len(sorted) == 0 {
-		return endpointConfigs
+	if len(preferred) == 0 {
+		return configs
 	}
-
-	// Combine: preferred first, then others
-	return append(sorted, remaining...)
+	return append(preferred, others...)
 }
 
 // KiroExecutor handles requests to AWS CodeWhisperer (Kiro) API.
 type KiroExecutor struct {
-	cfg       *config.Config
-	refreshMu sync.Mutex // Serializes token refresh operations to prevent race conditions
-}
-
-// isIDCAuth checks if the auth uses IDC (Identity Center) authentication method.
-func isIDCAuth(auth *cliproxyauth.Auth) bool {
-	if auth == nil || auth.Metadata == nil {
-		return false
-	}
-	authMethod, _ := auth.Metadata["auth_method"].(string)
-	return strings.ToLower(authMethod) == "idc"
+	cfg          *config.Config
+	refreshMu    sync.Mutex // Serializes token refresh operations to prevent race conditions
+	profileArnMu sync.Mutex // Serializes profileArn fetches to prevent concurrent map writes
 }
 
 // buildKiroPayloadForFormat builds the Kiro API payload based on the source format.
@@ -546,27 +493,22 @@ func NewKiroExecutor(cfg *config.Config) *KiroExecutor {
 // Identifier returns the unique identifier for this executor.
 func (e *KiroExecutor) Identifier() string { return "kiro" }
 
-// applyDynamicFingerprint applies token-specific fingerprint headers to the request
-// For IDC auth, uses dynamic fingerprint-based User-Agent
-// For other auth types, uses static Amazon Q CLI style headers
+// applyDynamicFingerprint applies account-specific fingerprint headers to the request.
 func applyDynamicFingerprint(req *http.Request, auth *cliproxyauth.Auth) {
-	if isIDCAuth(auth) {
-		// Get token-specific fingerprint for dynamic UA generation
-		tokenKey := getTokenKey(auth)
-		fp := getGlobalFingerprintManager().GetFingerprint(tokenKey)
+	accountKey := getAccountKey(auth)
+	fp := kiroauth.GlobalFingerprintManager().GetFingerprint(accountKey)
 
-		// Use fingerprint-generated dynamic User-Agent
-		req.Header.Set("User-Agent", fp.BuildUserAgent())
-		req.Header.Set("X-Amz-User-Agent", fp.BuildAmzUserAgent())
-		req.Header.Set("x-amzn-kiro-agent-mode", kiroIDEAgentModeVibe)
+	req.Header.Set("User-Agent", fp.BuildUserAgent())
+	req.Header.Set("X-Amz-User-Agent", fp.BuildAmzUserAgent())
+	req.Header.Set("x-amzn-kiro-agent-mode", kiroIDEAgentMode)
+	req.Header.Set("x-amzn-codewhisperer-optout", "true")
 
-		log.Debugf("kiro: using dynamic fingerprint for token %s (SDK:%s, OS:%s/%s, Kiro:%s)",
-			tokenKey[:8]+"...", fp.SDKVersion, fp.OSType, fp.OSVersion, fp.KiroVersion)
-	} else {
-		// Use static Amazon Q CLI style headers for non-IDC auth
-		req.Header.Set("User-Agent", kiroUserAgent)
-		req.Header.Set("X-Amz-User-Agent", kiroFullUserAgent)
+	keyPrefix := accountKey
+	if len(keyPrefix) > 8 {
+		keyPrefix = keyPrefix[:8]
 	}
+	log.Debugf("kiro: using dynamic fingerprint for account %s (SDK:%s, OS:%s/%s, Kiro:%s)",
+		keyPrefix+"...", fp.StreamingSDKVersion, fp.OSType, fp.OSVersion, fp.KiroVersion)
 }
 
 // PrepareRequest prepares the HTTP request before execution.
@@ -609,17 +551,51 @@ func (e *KiroExecutor) HttpRequest(ctx context.Context, auth *cliproxyauth.Auth,
 	return httpClient.Do(httpReq)
 }
 
-// getTokenKey returns a unique key for rate limiting based on auth credentials.
-// Uses auth ID if available, otherwise falls back to a hash of the access token.
-func getTokenKey(auth *cliproxyauth.Auth) string {
+// getAccountKey returns a stable account key for fingerprint lookup and rate limiting.
+// Fallback order:
+// 1) client_id / refresh_token (best account identity)
+// 2) auth.ID (stable local auth record)
+// 3) profile_arn (stable AWS profile identity)
+// 4) access_token (least preferred but deterministic)
+// 5) fixed anonymous seed
+func getAccountKey(auth *cliproxyauth.Auth) string {
+	var clientID, refreshToken, profileArn string
+	if auth != nil && auth.Metadata != nil {
+		clientID, _ = auth.Metadata["client_id"].(string)
+		refreshToken, _ = auth.Metadata["refresh_token"].(string)
+		profileArn, _ = auth.Metadata["profile_arn"].(string)
+	}
+	if clientID != "" || refreshToken != "" {
+		return kiroauth.GetAccountKey(clientID, refreshToken)
+	}
 	if auth != nil && auth.ID != "" {
-		return auth.ID
+		return kiroauth.GenerateAccountKey(auth.ID)
 	}
-	accessToken, _ := kiroCredentials(auth)
-	if len(accessToken) > 16 {
-		return accessToken[:16]
+	if profileArn != "" {
+		return kiroauth.GenerateAccountKey(profileArn)
 	}
-	return accessToken
+	if accessToken, _ := kiroCredentials(auth); accessToken != "" {
+		return kiroauth.GenerateAccountKey(accessToken)
+	}
+	return kiroauth.GenerateAccountKey("kiro-anonymous")
+}
+
+// getAuthValue looks up a value by key in auth Metadata, then Attributes.
+func getAuthValue(auth *cliproxyauth.Auth, key string) string {
+	if auth == nil {
+		return ""
+	}
+	if auth.Metadata != nil {
+		if v, ok := auth.Metadata[key].(string); ok && v != "" {
+			return strings.ToLower(strings.TrimSpace(v))
+		}
+	}
+	if auth.Attributes != nil {
+		if v := auth.Attributes[key]; v != "" {
+			return strings.ToLower(strings.TrimSpace(v))
+		}
+	}
+	return ""
 }
 
 // Execute sends the request to Kiro API and returns the response.
@@ -631,7 +607,7 @@ func (e *KiroExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, req
 	}
 
 	// Rate limiting: get token key for tracking
-	tokenKey := getTokenKey(auth)
+	tokenKey := getAccountKey(auth)
 	rateLimiter := kiroauth.GetGlobalRateLimiter()
 	cooldownMgr := kiroauth.GetGlobalCooldownManager()
 
@@ -693,6 +669,13 @@ func (e *KiroExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, req
 
 	kiroModelID := e.mapModelToKiro(req.Model)
 
+	// Fetch profileArn if missing (for imported accounts from Kiro IDE)
+	if profileArn == "" {
+		if fetched := e.fetchAndSaveProfileArn(ctx, auth, accessToken); fetched != "" {
+			profileArn = fetched
+		}
+	}
+
 	// Determine agentic mode and effective profile ARN using helper functions
 	isAgentic, isChatOnly := determineAgenticMode(req.Model)
 	effectiveProfileArn := getEffectiveProfileArnWithWarning(auth, profileArn)
@@ -749,7 +732,7 @@ func (e *KiroExecutor) executeWithRetry(ctx context.Context, auth *cliproxyauth.
 				httpReq.Header.Set("X-Amz-Target", endpointConfig.AmzTarget)
 			}
 			// Kiro-specific headers
-			httpReq.Header.Set("x-amzn-kiro-agent-mode", kiroIDEAgentModeVibe)
+			httpReq.Header.Set("x-amzn-kiro-agent-mode", kiroIDEAgentMode)
 			httpReq.Header.Set("x-amzn-codewhisperer-optout", "true")
 
 			// Apply dynamic fingerprint-based headers
@@ -1060,7 +1043,7 @@ func (e *KiroExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Aut
 	}
 
 	// Rate limiting: get token key for tracking
-	tokenKey := getTokenKey(auth)
+	tokenKey := getAccountKey(auth)
 	rateLimiter := kiroauth.GetGlobalRateLimiter()
 	cooldownMgr := kiroauth.GetGlobalCooldownManager()
 
@@ -1126,6 +1109,13 @@ func (e *KiroExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Aut
 
 	kiroModelID := e.mapModelToKiro(req.Model)
 
+	// Fetch profileArn if missing (for imported accounts from Kiro IDE)
+	if profileArn == "" {
+		if fetched := e.fetchAndSaveProfileArn(ctx, auth, accessToken); fetched != "" {
+			profileArn = fetched
+		}
+	}
+
 	// Determine agentic mode and effective profile ARN using helper functions
 	isAgentic, isChatOnly := determineAgenticMode(req.Model)
 	effectiveProfileArn := getEffectiveProfileArnWithWarning(auth, profileArn)
@@ -1185,7 +1175,7 @@ func (e *KiroExecutor) executeStreamWithRetry(ctx context.Context, auth *cliprox
 				httpReq.Header.Set("X-Amz-Target", endpointConfig.AmzTarget)
 			}
 			// Kiro-specific headers
-			httpReq.Header.Set("x-amzn-kiro-agent-mode", kiroIDEAgentModeVibe)
+			httpReq.Header.Set("x-amzn-kiro-agent-mode", kiroIDEAgentMode)
 			httpReq.Header.Set("x-amzn-codewhisperer-optout", "true")
 
 			// Apply dynamic fingerprint-based headers
@@ -1647,62 +1637,23 @@ func determineAgenticMode(model string) (isAgentic, isChatOnly bool) {
 	return isAgentic, isChatOnly
 }
 
-// getEffectiveProfileArn determines if profileArn should be included based on auth method.
-// profileArn is only needed for social auth (Google OAuth), not for AWS SSO OIDC (Builder ID/IDC).
-//
-// Detection logic (matching kiro-openai-gateway):
-// 1. Check auth_method field: "builder-id" or "idc"
-// 2. Check auth_type field: "aws_sso_oidc" (from kiro-cli tokens)
-// 3. Check for client_id + client_secret presence (AWS SSO OIDC signature)
-func getEffectiveProfileArn(auth *cliproxyauth.Auth, profileArn string) string {
-	if auth != nil && auth.Metadata != nil {
-		// Check 1: auth_method field (from CLIProxyAPI tokens)
-		if authMethod, ok := auth.Metadata["auth_method"].(string); ok && (authMethod == "builder-id" || authMethod == "idc") {
-			return "" // AWS SSO OIDC - don't include profileArn
-		}
-		// Check 2: auth_type field (from kiro-cli tokens)
-		if authType, ok := auth.Metadata["auth_type"].(string); ok && authType == "aws_sso_oidc" {
-			return "" // AWS SSO OIDC - don't include profileArn
-		}
-		// Check 3: client_id + client_secret presence (AWS SSO OIDC signature)
-		_, hasClientID := auth.Metadata["client_id"].(string)
-		_, hasClientSecret := auth.Metadata["client_secret"].(string)
-		if hasClientID && hasClientSecret {
-			return "" // AWS SSO OIDC - don't include profileArn
-		}
-	}
-	return profileArn
-}
-
-// getEffectiveProfileArnWithWarning determines if profileArn should be included based on auth method,
-// and logs a warning if profileArn is missing for non-builder-id auth.
-// This consolidates the auth_method check that was previously done separately.
-//
-// AWS SSO OIDC (Builder ID/IDC) users don't need profileArn - sending it causes 403 errors.
-// Only Kiro Desktop (social auth like Google/GitHub) users need profileArn.
-//
-// Detection logic (matching kiro-openai-gateway):
-// 1. Check auth_method field: "builder-id" or "idc"
-// 2. Check auth_type field: "aws_sso_oidc" (from kiro-cli tokens)
-// 3. Check for client_id + client_secret presence (AWS SSO OIDC signature)
+// getEffectiveProfileArnWithWarning suppresses profileArn for builder-id and AWS SSO OIDC auth.
+// Builder-id users (auth_method == "builder-id") and AWS SSO OIDC users (auth_type == "aws_sso_oidc")
+// don't need profileArn — sending it causes 403 errors.
+// For all other auth methods (e.g. social auth), profileArn is returned as-is,
+// with a warning logged if it is empty.
 func getEffectiveProfileArnWithWarning(auth *cliproxyauth.Auth, profileArn string) string {
 	if auth != nil && auth.Metadata != nil {
-		// Check 1: auth_method field (from CLIProxyAPI tokens)
-		if authMethod, ok := auth.Metadata["auth_method"].(string); ok && (authMethod == "builder-id" || authMethod == "idc") {
-			return "" // AWS SSO OIDC - don't include profileArn
+		// Check 1: auth_method field, skip for builder-id only
+		if authMethod, ok := auth.Metadata["auth_method"].(string); ok && authMethod == "builder-id" {
+			return ""
 		}
 		// Check 2: auth_type field (from kiro-cli tokens)
 		if authType, ok := auth.Metadata["auth_type"].(string); ok && authType == "aws_sso_oidc" {
 			return "" // AWS SSO OIDC - don't include profileArn
 		}
-		// Check 3: client_id + client_secret presence (AWS SSO OIDC signature, like kiro-openai-gateway)
-		_, hasClientID := auth.Metadata["client_id"].(string)
-		_, hasClientSecret := auth.Metadata["client_secret"].(string)
-		if hasClientID && hasClientSecret {
-			return "" // AWS SSO OIDC - don't include profileArn
-		}
 	}
-	// For social auth (Kiro Desktop), profileArn is required
+	// For social auth and IDC, profileArn is required
 	if profileArn == "" {
 		log.Warnf("kiro: profile ARN not found in auth, API calls may fail")
 	}
@@ -2514,7 +2465,6 @@ func (e *KiroExecutor) streamToChannel(ctx context.Context, body io.Reader, out 
 	reader := bufio.NewReaderSize(body, 20*1024*1024) // 20MB buffer to match other providers
 	var totalUsage usage.Detail
 	var hasToolUses bool          // Track if any tool uses were emitted
-	var hasTruncatedTools bool    // Track if any tool uses were truncated
 	var upstreamStopReason string // Track stop_reason from upstream events
 
 	// Tool use state tracking for input buffering and deduplication
@@ -2630,9 +2580,7 @@ func (e *KiroExecutor) streamToChannel(ctx context.Context, body io.Reader, out 
 				blockStart := kiroclaude.BuildClaudeContentBlockStartEvent(contentBlockIndex, "tool_use", currentToolUse.ToolUseID, currentToolUse.Name)
 				sseData := sdktranslator.TranslateStream(ctx, sdktranslator.FromString("kiro"), targetFormat, model, originalReq, claudeBody, blockStart, &translatorParam)
 				for _, chunk := range sseData {
-					if chunk != "" {
-						out <- cliproxyexecutor.StreamChunk{Payload: []byte(chunk + "\n\n")}
-					}
+					enqueueTranslatedSSE(out, chunk)
 				}
 
 				// Send tool input as delta
@@ -2640,18 +2588,14 @@ func (e *KiroExecutor) streamToChannel(ctx context.Context, body io.Reader, out 
 				inputDelta := kiroclaude.BuildClaudeInputJsonDeltaEvent(string(inputBytes), contentBlockIndex)
 				sseData = sdktranslator.TranslateStream(ctx, sdktranslator.FromString("kiro"), targetFormat, model, originalReq, claudeBody, inputDelta, &translatorParam)
 				for _, chunk := range sseData {
-					if chunk != "" {
-						out <- cliproxyexecutor.StreamChunk{Payload: []byte(chunk + "\n\n")}
-					}
+					enqueueTranslatedSSE(out, chunk)
 				}
 
 				// Close block
 				blockStop := kiroclaude.BuildClaudeContentBlockStopEvent(contentBlockIndex)
 				sseData = sdktranslator.TranslateStream(ctx, sdktranslator.FromString("kiro"), targetFormat, model, originalReq, claudeBody, blockStop, &translatorParam)
 				for _, chunk := range sseData {
-					if chunk != "" {
-						out <- cliproxyexecutor.StreamChunk{Payload: []byte(chunk + "\n\n")}
-					}
+					enqueueTranslatedSSE(out, chunk)
 				}
 
 				hasToolUses = true
@@ -2721,9 +2665,7 @@ func (e *KiroExecutor) streamToChannel(ctx context.Context, body io.Reader, out 
 			msgStart := kiroclaude.BuildClaudeMessageStartEvent(model, totalUsage.InputTokens)
 			sseData := sdktranslator.TranslateStream(ctx, sdktranslator.FromString("kiro"), targetFormat, model, originalReq, claudeBody, msgStart, &translatorParam)
 			for _, chunk := range sseData {
-				if chunk != "" {
-					out <- cliproxyexecutor.StreamChunk{Payload: []byte(chunk + "\n\n")}
-				}
+				enqueueTranslatedSSE(out, chunk)
 			}
 			messageStartSent = true
 		}
@@ -2973,9 +2915,7 @@ func (e *KiroExecutor) streamToChannel(ctx context.Context, body io.Reader, out 
 						pingEvent := kiroclaude.BuildClaudePingEventWithUsage(totalUsage.InputTokens, currentOutputTokens)
 						sseData := sdktranslator.TranslateStream(ctx, sdktranslator.FromString("kiro"), targetFormat, model, originalReq, claudeBody, pingEvent, &translatorParam)
 						for _, chunk := range sseData {
-							if chunk != "" {
-								out <- cliproxyexecutor.StreamChunk{Payload: []byte(chunk + "\n\n")}
-							}
+							enqueueTranslatedSSE(out, chunk)
 						}
 
 						lastReportedOutputTokens = currentOutputTokens
@@ -2996,17 +2936,13 @@ func (e *KiroExecutor) streamToChannel(ctx context.Context, body io.Reader, out 
 							blockStart := kiroclaude.BuildClaudeContentBlockStartEvent(contentBlockIndex, "text", "", "")
 							sseData := sdktranslator.TranslateStream(ctx, sdktranslator.FromString("kiro"), targetFormat, model, originalReq, claudeBody, blockStart, &translatorParam)
 							for _, chunk := range sseData {
-								if chunk != "" {
-									out <- cliproxyexecutor.StreamChunk{Payload: []byte(chunk + "\n\n")}
-								}
+								enqueueTranslatedSSE(out, chunk)
 							}
 						}
 						claudeEvent := kiroclaude.BuildClaudeStreamEvent(processText, contentBlockIndex)
 						sseData := sdktranslator.TranslateStream(ctx, sdktranslator.FromString("kiro"), targetFormat, model, originalReq, claudeBody, claudeEvent, &translatorParam)
 						for _, chunk := range sseData {
-							if chunk != "" {
-								out <- cliproxyexecutor.StreamChunk{Payload: []byte(chunk + "\n\n")}
-							}
+							enqueueTranslatedSSE(out, chunk)
 						}
 					}
 					continue
@@ -3035,18 +2971,14 @@ func (e *KiroExecutor) streamToChannel(ctx context.Context, body io.Reader, out 
 									blockStart := kiroclaude.BuildClaudeContentBlockStartEvent(thinkingBlockIndex, "thinking", "", "")
 									sseData := sdktranslator.TranslateStream(ctx, sdktranslator.FromString("kiro"), targetFormat, model, originalReq, claudeBody, blockStart, &translatorParam)
 									for _, chunk := range sseData {
-										if chunk != "" {
-											out <- cliproxyexecutor.StreamChunk{Payload: []byte(chunk + "\n\n")}
-										}
+										enqueueTranslatedSSE(out, chunk)
 									}
 								}
 								// Send thinking delta
 								thinkingEvent := kiroclaude.BuildClaudeThinkingDeltaEvent(thinkingText, thinkingBlockIndex)
 								sseData := sdktranslator.TranslateStream(ctx, sdktranslator.FromString("kiro"), targetFormat, model, originalReq, claudeBody, thinkingEvent, &translatorParam)
 								for _, chunk := range sseData {
-									if chunk != "" {
-										out <- cliproxyexecutor.StreamChunk{Payload: []byte(chunk + "\n\n")}
-									}
+									enqueueTranslatedSSE(out, chunk)
 								}
 								accumulatedThinkingContent.WriteString(thinkingText)
 							}
@@ -3055,9 +2987,7 @@ func (e *KiroExecutor) streamToChannel(ctx context.Context, body io.Reader, out 
 								blockStop := kiroclaude.BuildClaudeThinkingBlockStopEvent(thinkingBlockIndex)
 								sseData := sdktranslator.TranslateStream(ctx, sdktranslator.FromString("kiro"), targetFormat, model, originalReq, claudeBody, blockStop, &translatorParam)
 								for _, chunk := range sseData {
-									if chunk != "" {
-										out <- cliproxyexecutor.StreamChunk{Payload: []byte(chunk + "\n\n")}
-									}
+									enqueueTranslatedSSE(out, chunk)
 								}
 								isThinkingBlockOpen = false
 							}
@@ -3086,17 +3016,13 @@ func (e *KiroExecutor) streamToChannel(ctx context.Context, body io.Reader, out 
 										blockStart := kiroclaude.BuildClaudeContentBlockStartEvent(thinkingBlockIndex, "thinking", "", "")
 										sseData := sdktranslator.TranslateStream(ctx, sdktranslator.FromString("kiro"), targetFormat, model, originalReq, claudeBody, blockStart, &translatorParam)
 										for _, chunk := range sseData {
-											if chunk != "" {
-												out <- cliproxyexecutor.StreamChunk{Payload: []byte(chunk + "\n\n")}
-											}
+											enqueueTranslatedSSE(out, chunk)
 										}
 									}
 									thinkingEvent := kiroclaude.BuildClaudeThinkingDeltaEvent(processContent, thinkingBlockIndex)
 									sseData := sdktranslator.TranslateStream(ctx, sdktranslator.FromString("kiro"), targetFormat, model, originalReq, claudeBody, thinkingEvent, &translatorParam)
 									for _, chunk := range sseData {
-										if chunk != "" {
-											out <- cliproxyexecutor.StreamChunk{Payload: []byte(chunk + "\n\n")}
-										}
+										enqueueTranslatedSSE(out, chunk)
 									}
 									accumulatedThinkingContent.WriteString(processContent)
 								}
@@ -3115,9 +3041,7 @@ func (e *KiroExecutor) streamToChannel(ctx context.Context, body io.Reader, out 
 									blockStop := kiroclaude.BuildClaudeThinkingBlockStopEvent(thinkingBlockIndex)
 									sseData := sdktranslator.TranslateStream(ctx, sdktranslator.FromString("kiro"), targetFormat, model, originalReq, claudeBody, blockStop, &translatorParam)
 									for _, chunk := range sseData {
-										if chunk != "" {
-											out <- cliproxyexecutor.StreamChunk{Payload: []byte(chunk + "\n\n")}
-										}
+										enqueueTranslatedSSE(out, chunk)
 									}
 									isThinkingBlockOpen = false
 								}
@@ -3128,18 +3052,14 @@ func (e *KiroExecutor) streamToChannel(ctx context.Context, body io.Reader, out 
 									blockStart := kiroclaude.BuildClaudeContentBlockStartEvent(contentBlockIndex, "text", "", "")
 									sseData := sdktranslator.TranslateStream(ctx, sdktranslator.FromString("kiro"), targetFormat, model, originalReq, claudeBody, blockStart, &translatorParam)
 									for _, chunk := range sseData {
-										if chunk != "" {
-											out <- cliproxyexecutor.StreamChunk{Payload: []byte(chunk + "\n\n")}
-										}
+										enqueueTranslatedSSE(out, chunk)
 									}
 								}
 								// Send text delta
 								claudeEvent := kiroclaude.BuildClaudeStreamEvent(textBefore, contentBlockIndex)
 								sseData := sdktranslator.TranslateStream(ctx, sdktranslator.FromString("kiro"), targetFormat, model, originalReq, claudeBody, claudeEvent, &translatorParam)
 								for _, chunk := range sseData {
-									if chunk != "" {
-										out <- cliproxyexecutor.StreamChunk{Payload: []byte(chunk + "\n\n")}
-									}
+									enqueueTranslatedSSE(out, chunk)
 								}
 							}
 							// Close text block before entering thinking
@@ -3147,9 +3067,7 @@ func (e *KiroExecutor) streamToChannel(ctx context.Context, body io.Reader, out 
 								blockStop := kiroclaude.BuildClaudeContentBlockStopEvent(contentBlockIndex)
 								sseData := sdktranslator.TranslateStream(ctx, sdktranslator.FromString("kiro"), targetFormat, model, originalReq, claudeBody, blockStop, &translatorParam)
 								for _, chunk := range sseData {
-									if chunk != "" {
-										out <- cliproxyexecutor.StreamChunk{Payload: []byte(chunk + "\n\n")}
-									}
+									enqueueTranslatedSSE(out, chunk)
 								}
 								isTextBlockOpen = false
 							}
@@ -3177,17 +3095,13 @@ func (e *KiroExecutor) streamToChannel(ctx context.Context, body io.Reader, out 
 										blockStart := kiroclaude.BuildClaudeContentBlockStartEvent(contentBlockIndex, "text", "", "")
 										sseData := sdktranslator.TranslateStream(ctx, sdktranslator.FromString("kiro"), targetFormat, model, originalReq, claudeBody, blockStart, &translatorParam)
 										for _, chunk := range sseData {
-											if chunk != "" {
-												out <- cliproxyexecutor.StreamChunk{Payload: []byte(chunk + "\n\n")}
-											}
+											enqueueTranslatedSSE(out, chunk)
 										}
 									}
 									claudeEvent := kiroclaude.BuildClaudeStreamEvent(processContent, contentBlockIndex)
 									sseData := sdktranslator.TranslateStream(ctx, sdktranslator.FromString("kiro"), targetFormat, model, originalReq, claudeBody, claudeEvent, &translatorParam)
 									for _, chunk := range sseData {
-										if chunk != "" {
-											out <- cliproxyexecutor.StreamChunk{Payload: []byte(chunk + "\n\n")}
-										}
+										enqueueTranslatedSSE(out, chunk)
 									}
 								}
 							}
@@ -3215,9 +3129,7 @@ func (e *KiroExecutor) streamToChannel(ctx context.Context, body io.Reader, out 
 					blockStop := kiroclaude.BuildClaudeContentBlockStopEvent(contentBlockIndex)
 					sseData := sdktranslator.TranslateStream(ctx, sdktranslator.FromString("kiro"), targetFormat, model, originalReq, claudeBody, blockStop, &translatorParam)
 					for _, chunk := range sseData {
-						if chunk != "" {
-							out <- cliproxyexecutor.StreamChunk{Payload: []byte(chunk + "\n\n")}
-						}
+						enqueueTranslatedSSE(out, chunk)
 					}
 					isTextBlockOpen = false
 				}
@@ -3228,9 +3140,7 @@ func (e *KiroExecutor) streamToChannel(ctx context.Context, body io.Reader, out 
 				blockStart := kiroclaude.BuildClaudeContentBlockStartEvent(contentBlockIndex, "tool_use", toolUseID, toolName)
 				sseData := sdktranslator.TranslateStream(ctx, sdktranslator.FromString("kiro"), targetFormat, model, originalReq, claudeBody, blockStart, &translatorParam)
 				for _, chunk := range sseData {
-					if chunk != "" {
-						out <- cliproxyexecutor.StreamChunk{Payload: []byte(chunk + "\n\n")}
-					}
+					enqueueTranslatedSSE(out, chunk)
 				}
 
 				// Send input_json_delta with the tool input
@@ -3243,9 +3153,7 @@ func (e *KiroExecutor) streamToChannel(ctx context.Context, body io.Reader, out 
 						inputDelta := kiroclaude.BuildClaudeInputJsonDeltaEvent(string(inputJSON), contentBlockIndex)
 						sseData = sdktranslator.TranslateStream(ctx, sdktranslator.FromString("kiro"), targetFormat, model, originalReq, claudeBody, inputDelta, &translatorParam)
 						for _, chunk := range sseData {
-							if chunk != "" {
-								out <- cliproxyexecutor.StreamChunk{Payload: []byte(chunk + "\n\n")}
-							}
+							enqueueTranslatedSSE(out, chunk)
 						}
 					}
 				}
@@ -3254,9 +3162,7 @@ func (e *KiroExecutor) streamToChannel(ctx context.Context, body io.Reader, out 
 				blockStop := kiroclaude.BuildClaudeContentBlockStopEvent(contentBlockIndex)
 				sseData = sdktranslator.TranslateStream(ctx, sdktranslator.FromString("kiro"), targetFormat, model, originalReq, claudeBody, blockStop, &translatorParam)
 				for _, chunk := range sseData {
-					if chunk != "" {
-						out <- cliproxyexecutor.StreamChunk{Payload: []byte(chunk + "\n\n")}
-					}
+					enqueueTranslatedSSE(out, chunk)
 				}
 			}
 
@@ -3296,9 +3202,7 @@ func (e *KiroExecutor) streamToChannel(ctx context.Context, body io.Reader, out 
 					blockStop := kiroclaude.BuildClaudeContentBlockStopEvent(contentBlockIndex)
 					sseData := sdktranslator.TranslateStream(ctx, sdktranslator.FromString("kiro"), targetFormat, model, originalReq, claudeBody, blockStop, &translatorParam)
 					for _, chunk := range sseData {
-						if chunk != "" {
-							out <- cliproxyexecutor.StreamChunk{Payload: []byte(chunk + "\n\n")}
-						}
+						enqueueTranslatedSSE(out, chunk)
 					}
 					isTextBlockOpen = false
 				}
@@ -3311,9 +3215,7 @@ func (e *KiroExecutor) streamToChannel(ctx context.Context, body io.Reader, out 
 					blockStart := kiroclaude.BuildClaudeContentBlockStartEvent(thinkingBlockIndex, "thinking", "", "")
 					sseData := sdktranslator.TranslateStream(ctx, sdktranslator.FromString("kiro"), targetFormat, model, originalReq, claudeBody, blockStart, &translatorParam)
 					for _, chunk := range sseData {
-						if chunk != "" {
-							out <- cliproxyexecutor.StreamChunk{Payload: []byte(chunk + "\n\n")}
-						}
+						enqueueTranslatedSSE(out, chunk)
 					}
 				}
 
@@ -3321,9 +3223,7 @@ func (e *KiroExecutor) streamToChannel(ctx context.Context, body io.Reader, out 
 				thinkingEvent := kiroclaude.BuildClaudeThinkingDeltaEvent(thinkingText, thinkingBlockIndex)
 				sseData := sdktranslator.TranslateStream(ctx, sdktranslator.FromString("kiro"), targetFormat, model, originalReq, claudeBody, thinkingEvent, &translatorParam)
 				for _, chunk := range sseData {
-					if chunk != "" {
-						out <- cliproxyexecutor.StreamChunk{Payload: []byte(chunk + "\n\n")}
-					}
+					enqueueTranslatedSSE(out, chunk)
 				}
 
 				// Accumulate for token counting
@@ -3342,59 +3242,9 @@ func (e *KiroExecutor) streamToChannel(ctx context.Context, body io.Reader, out 
 
 			// Emit completed tool uses
 			for _, tu := range completedToolUses {
-				// Check if this tool was truncated - emit with SOFT_LIMIT_REACHED marker
+				// Skip truncated tools - don't emit fake marker tool_use
 				if tu.IsTruncated {
-					hasTruncatedTools = true
-					log.Infof("kiro: streamToChannel emitting truncated tool with SOFT_LIMIT_REACHED: %s (ID: %s)", tu.Name, tu.ToolUseID)
-
-					// Close text block if open
-					if isTextBlockOpen && contentBlockIndex >= 0 {
-						blockStop := kiroclaude.BuildClaudeContentBlockStopEvent(contentBlockIndex)
-						sseData := sdktranslator.TranslateStream(ctx, sdktranslator.FromString("kiro"), targetFormat, model, originalReq, claudeBody, blockStop, &translatorParam)
-						for _, chunk := range sseData {
-							if chunk != "" {
-								out <- cliproxyexecutor.StreamChunk{Payload: []byte(chunk + "\n\n")}
-							}
-						}
-						isTextBlockOpen = false
-					}
-
-					contentBlockIndex++
-
-					// Emit tool_use with SOFT_LIMIT_REACHED marker input
-					blockStart := kiroclaude.BuildClaudeContentBlockStartEvent(contentBlockIndex, "tool_use", tu.ToolUseID, tu.Name)
-					sseData := sdktranslator.TranslateStream(ctx, sdktranslator.FromString("kiro"), targetFormat, model, originalReq, claudeBody, blockStart, &translatorParam)
-					for _, chunk := range sseData {
-						if chunk != "" {
-							out <- cliproxyexecutor.StreamChunk{Payload: []byte(chunk + "\n\n")}
-						}
-					}
-
-					// Build SOFT_LIMIT_REACHED marker input
-					markerInput := map[string]interface{}{
-						"_status":  "SOFT_LIMIT_REACHED",
-						"_message": "Tool output was truncated. Split content into smaller chunks (max 300 lines). Due to potential model hallucination, you MUST re-fetch the current working directory and generate the correct file_path.",
-					}
-
-					markerJSON, _ := json.Marshal(markerInput)
-					inputDelta := kiroclaude.BuildClaudeInputJsonDeltaEvent(string(markerJSON), contentBlockIndex)
-					sseData = sdktranslator.TranslateStream(ctx, sdktranslator.FromString("kiro"), targetFormat, model, originalReq, claudeBody, inputDelta, &translatorParam)
-					for _, chunk := range sseData {
-						if chunk != "" {
-							out <- cliproxyexecutor.StreamChunk{Payload: []byte(chunk + "\n\n")}
-						}
-					}
-
-					// Close tool_use block
-					blockStop := kiroclaude.BuildClaudeContentBlockStopEvent(contentBlockIndex)
-					sseData = sdktranslator.TranslateStream(ctx, sdktranslator.FromString("kiro"), targetFormat, model, originalReq, claudeBody, blockStop, &translatorParam)
-					for _, chunk := range sseData {
-						if chunk != "" {
-							out <- cliproxyexecutor.StreamChunk{Payload: []byte(chunk + "\n\n")}
-						}
-					}
-
-					hasToolUses = true // Keep this so stop_reason = tool_use
+					log.Warnf("kiro: streamToChannel skipping truncated tool: %s (ID: %s)", tu.Name, tu.ToolUseID)
 					continue
 				}
 
@@ -3405,9 +3255,7 @@ func (e *KiroExecutor) streamToChannel(ctx context.Context, body io.Reader, out 
 					blockStop := kiroclaude.BuildClaudeContentBlockStopEvent(contentBlockIndex)
 					sseData := sdktranslator.TranslateStream(ctx, sdktranslator.FromString("kiro"), targetFormat, model, originalReq, claudeBody, blockStop, &translatorParam)
 					for _, chunk := range sseData {
-						if chunk != "" {
-							out <- cliproxyexecutor.StreamChunk{Payload: []byte(chunk + "\n\n")}
-						}
+						enqueueTranslatedSSE(out, chunk)
 					}
 					isTextBlockOpen = false
 				}
@@ -3417,9 +3265,7 @@ func (e *KiroExecutor) streamToChannel(ctx context.Context, body io.Reader, out 
 				blockStart := kiroclaude.BuildClaudeContentBlockStartEvent(contentBlockIndex, "tool_use", tu.ToolUseID, tu.Name)
 				sseData := sdktranslator.TranslateStream(ctx, sdktranslator.FromString("kiro"), targetFormat, model, originalReq, claudeBody, blockStart, &translatorParam)
 				for _, chunk := range sseData {
-					if chunk != "" {
-						out <- cliproxyexecutor.StreamChunk{Payload: []byte(chunk + "\n\n")}
-					}
+					enqueueTranslatedSSE(out, chunk)
 				}
 
 				if tu.Input != nil {
@@ -3430,9 +3276,7 @@ func (e *KiroExecutor) streamToChannel(ctx context.Context, body io.Reader, out 
 						inputDelta := kiroclaude.BuildClaudeInputJsonDeltaEvent(string(inputJSON), contentBlockIndex)
 						sseData = sdktranslator.TranslateStream(ctx, sdktranslator.FromString("kiro"), targetFormat, model, originalReq, claudeBody, inputDelta, &translatorParam)
 						for _, chunk := range sseData {
-							if chunk != "" {
-								out <- cliproxyexecutor.StreamChunk{Payload: []byte(chunk + "\n\n")}
-							}
+							enqueueTranslatedSSE(out, chunk)
 						}
 					}
 				}
@@ -3440,9 +3284,7 @@ func (e *KiroExecutor) streamToChannel(ctx context.Context, body io.Reader, out 
 				blockStop := kiroclaude.BuildClaudeContentBlockStopEvent(contentBlockIndex)
 				sseData = sdktranslator.TranslateStream(ctx, sdktranslator.FromString("kiro"), targetFormat, model, originalReq, claudeBody, blockStop, &translatorParam)
 				for _, chunk := range sseData {
-					if chunk != "" {
-						out <- cliproxyexecutor.StreamChunk{Payload: []byte(chunk + "\n\n")}
-					}
+					enqueueTranslatedSSE(out, chunk)
 				}
 			}
 
@@ -3629,9 +3471,7 @@ func (e *KiroExecutor) streamToChannel(ctx context.Context, body io.Reader, out 
 		blockStop := kiroclaude.BuildClaudeContentBlockStopEvent(contentBlockIndex)
 		sseData := sdktranslator.TranslateStream(ctx, sdktranslator.FromString("kiro"), targetFormat, model, originalReq, claudeBody, blockStop, &translatorParam)
 		for _, chunk := range sseData {
-			if chunk != "" {
-				out <- cliproxyexecutor.StreamChunk{Payload: []byte(chunk + "\n\n")}
-			}
+			enqueueTranslatedSSE(out, chunk)
 		}
 	}
 
@@ -3696,12 +3536,7 @@ func (e *KiroExecutor) streamToChannel(ctx context.Context, body io.Reader, out 
 	}
 
 	// Determine stop reason: prefer upstream, then detect tool_use, default to end_turn
-	// SOFT_LIMIT_REACHED: Keep stop_reason = "tool_use" so Claude continues the loop
 	stopReason := upstreamStopReason
-	if hasTruncatedTools {
-		// Log that we're using SOFT_LIMIT_REACHED approach
-		log.Infof("kiro: streamToChannel using SOFT_LIMIT_REACHED - keeping stop_reason=tool_use for truncated tools")
-	}
 	if stopReason == "" {
 		if hasToolUses {
 			stopReason = "tool_use"
@@ -3721,18 +3556,14 @@ func (e *KiroExecutor) streamToChannel(ctx context.Context, body io.Reader, out 
 	msgDelta := kiroclaude.BuildClaudeMessageDeltaEvent(stopReason, totalUsage)
 	sseData := sdktranslator.TranslateStream(ctx, sdktranslator.FromString("kiro"), targetFormat, model, originalReq, claudeBody, msgDelta, &translatorParam)
 	for _, chunk := range sseData {
-		if chunk != "" {
-			out <- cliproxyexecutor.StreamChunk{Payload: []byte(chunk + "\n\n")}
-		}
+		enqueueTranslatedSSE(out, chunk)
 	}
 
 	// Send message_stop event separately
 	msgStop := kiroclaude.BuildClaudeMessageStopOnlyEvent()
 	sseData = sdktranslator.TranslateStream(ctx, sdktranslator.FromString("kiro"), targetFormat, model, originalReq, claudeBody, msgStop, &translatorParam)
 	for _, chunk := range sseData {
-		if chunk != "" {
-			out <- cliproxyexecutor.StreamChunk{Payload: []byte(chunk + "\n\n")}
-		}
+		enqueueTranslatedSSE(out, chunk)
 	}
 	// reporter.publish is called via defer
 }
@@ -3997,6 +3828,51 @@ func (e *KiroExecutor) persistRefreshedAuth(auth *cliproxyauth.Auth) error {
 
 	log.Debugf("kiro executor: persisted refreshed auth to %s", authPath)
 	return nil
+}
+
+// fetchAndSaveProfileArn fetches profileArn from API if missing, updates auth and persists to file.
+func (e *KiroExecutor) fetchAndSaveProfileArn(ctx context.Context, auth *cliproxyauth.Auth, accessToken string) string {
+	if auth == nil || auth.Metadata == nil {
+		return ""
+	}
+
+	// Skip for Builder ID - they don't have profiles
+	if authMethod, ok := auth.Metadata["auth_method"].(string); ok && authMethod == "builder-id" {
+		log.Debugf("kiro executor: skipping profileArn fetch for builder-id auth")
+		return ""
+	}
+
+	e.profileArnMu.Lock()
+	defer e.profileArnMu.Unlock()
+
+	// Double-check: another goroutine may have already fetched and saved the profileArn
+	if arn, ok := auth.Metadata["profile_arn"].(string); ok && arn != "" {
+		return arn
+	}
+
+	clientID, _ := auth.Metadata["client_id"].(string)
+	refreshToken, _ := auth.Metadata["refresh_token"].(string)
+
+	ssoClient := kiroauth.NewSSOOIDCClient(e.cfg)
+	profileArn := ssoClient.FetchProfileArn(ctx, accessToken, clientID, refreshToken)
+	if profileArn == "" {
+		log.Debugf("kiro executor: FetchProfileArn returned no profiles")
+		return ""
+	}
+
+	auth.Metadata["profile_arn"] = profileArn
+	if auth.Attributes == nil {
+		auth.Attributes = make(map[string]string)
+	}
+	auth.Attributes["profile_arn"] = profileArn
+
+	if err := e.persistRefreshedAuth(auth); err != nil {
+		log.Warnf("kiro executor: failed to persist profileArn: %v", err)
+	} else {
+		log.Infof("kiro executor: fetched and saved profileArn: %s", profileArn)
+	}
+
+	return profileArn
 }
 
 // reloadAuthFromFile 从文件重新加载 auth 数据（方案 B: Fallback 机制）
@@ -4728,7 +4604,7 @@ func (e *KiroExecutor) callKiroAndBuffer(
 	isAgentic, isChatOnly := determineAgenticMode(req.Model)
 	effectiveProfileArn := getEffectiveProfileArnWithWarning(auth, profileArn)
 
-	tokenKey := getTokenKey(auth)
+	tokenKey := getAccountKey(auth)
 
 	kiroStream, err := e.executeStreamWithRetry(
 		ctx, auth, req, opts, accessToken, effectiveProfileArn,
@@ -4770,7 +4646,7 @@ func (e *KiroExecutor) callKiroDirectStream(
 	isAgentic, isChatOnly := determineAgenticMode(req.Model)
 	effectiveProfileArn := getEffectiveProfileArnWithWarning(auth, profileArn)
 
-	tokenKey := getTokenKey(auth)
+	tokenKey := getAccountKey(auth)
 
 	reporter := newUsageReporter(ctx, e.Identifier(), req.Model, auth)
 	var streamErr error
@@ -4819,7 +4695,7 @@ func (e *KiroExecutor) executeNonStreamFallback(
 	kiroModelID := e.mapModelToKiro(req.Model)
 	isAgentic, isChatOnly := determineAgenticMode(req.Model)
 	effectiveProfileArn := getEffectiveProfileArnWithWarning(auth, profileArn)
-	tokenKey := getTokenKey(auth)
+	tokenKey := getAccountKey(auth)
 
 	reporter := newUsageReporter(ctx, e.Identifier(), req.Model, auth)
 	var err error
