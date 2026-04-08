@@ -26,6 +26,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/registry"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/thinking"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/util"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/websearch"
 	sdkAuth "github.com/router-for-me/CLIProxyAPI/v6/sdk/auth"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/executor"
@@ -162,6 +163,14 @@ func (e *AntigravityExecutor) Execute(ctx context.Context, auth *cliproxyauth.Au
 
 	requestedModel := payloadRequestedModel(opts, req.Model)
 	translated = applyPayloadConfigWithRoot(e.cfg, baseModel, "antigravity", "request", translated, originalTranslated, requestedModel)
+
+		// Web search interception: intercept web_search tool calls and execute via SearXNG
+		websearchResult, websearchErr := websearch.InterceptRequest(ctx, e.cfg, translated, to.String(), baseModel)
+		if websearchErr != nil {
+			logWithRequestID(ctx).WithError(websearchErr).Warn("websearch: interception failed, passing request through")
+		} else if websearchResult != nil {
+			translated = websearchResult.ModifiedBody
+		}
 
 	baseURLs := antigravityBaseURLFallbackOrder(auth)
 	httpClient := newProxyAwareHTTPClient(ctx, e.cfg, auth, 0)
@@ -307,6 +316,14 @@ func (e *AntigravityExecutor) executeClaudeNonStream(ctx context.Context, auth *
 
 	requestedModel := payloadRequestedModel(opts, req.Model)
 	translated = applyPayloadConfigWithRoot(e.cfg, baseModel, "antigravity", "request", translated, originalTranslated, requestedModel)
+
+		// Web search interception: intercept web_search tool calls and execute via SearXNG
+		websearchResult, websearchErr := websearch.InterceptRequest(ctx, e.cfg, translated, to.String(), baseModel)
+		if websearchErr != nil {
+			logWithRequestID(ctx).WithError(websearchErr).Warn("websearch: interception failed, passing request through")
+		} else if websearchResult != nil {
+			translated = websearchResult.ModifiedBody
+		}
 
 	baseURLs := antigravityBaseURLFallbackOrder(auth)
 	httpClient := newProxyAwareHTTPClient(ctx, e.cfg, auth, 0)
@@ -702,6 +719,14 @@ func (e *AntigravityExecutor) ExecuteStream(ctx context.Context, auth *cliproxya
 
 	requestedModel := payloadRequestedModel(opts, req.Model)
 	translated = applyPayloadConfigWithRoot(e.cfg, baseModel, "antigravity", "request", translated, originalTranslated, requestedModel)
+
+		// Web search interception: intercept web_search tool calls and execute via SearXNG
+		websearchResult, websearchErr := websearch.InterceptRequest(ctx, e.cfg, translated, to.String(), baseModel)
+		if websearchErr != nil {
+			logWithRequestID(ctx).WithError(websearchErr).Warn("websearch: interception failed, passing request through")
+		} else if websearchResult != nil {
+			translated = websearchResult.ModifiedBody
+		}
 
 	baseURLs := antigravityBaseURLFallbackOrder(auth)
 	httpClient := newProxyAwareHTTPClient(ctx, e.cfg, auth, 0)

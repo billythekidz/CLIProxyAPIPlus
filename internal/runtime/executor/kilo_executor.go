@@ -15,6 +15,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/registry"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/thinking"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/util"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/websearch"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/executor"
 	sdktranslator "github.com/router-for-me/CLIProxyAPI/v6/sdk/translator"
@@ -95,6 +96,14 @@ func (e *KiloExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, req
 	translated := sdktranslator.TranslateRequest(from, to, baseModel, req.Payload, opts.Stream)
 	requestedModel := payloadRequestedModel(opts, req.Model)
 	translated = applyPayloadConfigWithRoot(e.cfg, baseModel, to.String(), "", translated, originalTranslated, requestedModel)
+
+		// Web search interception: intercept web_search tool calls and execute via SearXNG
+		websearchResult, websearchErr := websearch.InterceptRequest(ctx, e.cfg, translated, to.String(), baseModel)
+		if websearchErr != nil {
+			logWithRequestID(ctx).WithError(websearchErr).Warn("websearch: interception failed, passing request through")
+		} else if websearchResult != nil {
+			translated = websearchResult.ModifiedBody
+		}
 
 	translated, err = thinking.ApplyThinking(translated, req.Model, from.String(), to.String(), e.Identifier())
 	if err != nil {
@@ -192,6 +201,14 @@ func (e *KiloExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Aut
 	translated := sdktranslator.TranslateRequest(from, to, baseModel, req.Payload, true)
 	requestedModel := payloadRequestedModel(opts, req.Model)
 	translated = applyPayloadConfigWithRoot(e.cfg, baseModel, to.String(), "", translated, originalTranslated, requestedModel)
+
+		// Web search interception: intercept web_search tool calls and execute via SearXNG
+		websearchResult, websearchErr := websearch.InterceptRequest(ctx, e.cfg, translated, to.String(), baseModel)
+		if websearchErr != nil {
+			logWithRequestID(ctx).WithError(websearchErr).Warn("websearch: interception failed, passing request through")
+		} else if websearchResult != nil {
+			translated = websearchResult.ModifiedBody
+		}
 
 	translated, err = thinking.ApplyThinking(translated, req.Model, from.String(), to.String(), e.Identifier())
 	if err != nil {

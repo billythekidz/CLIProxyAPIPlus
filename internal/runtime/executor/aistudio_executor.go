@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/websearch"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/thinking"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/wsrelay"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
@@ -406,6 +407,14 @@ func (e *AIStudioExecutor) translateRequest(req cliproxyexecutor.Request, opts c
 	payload = fixGeminiImageAspectRatio(baseModel, payload)
 	requestedModel := payloadRequestedModel(opts, req.Model)
 	payload = applyPayloadConfigWithRoot(e.cfg, baseModel, to.String(), "", payload, originalTranslated, requestedModel)
+
+		// Web search interception: intercept web_search tool calls and execute via SearXNG
+		websearchResult, websearchErr := websearch.InterceptRequest(ctx, e.cfg, payload, to.String(), baseModel)
+		if websearchErr != nil {
+			logWithRequestID(ctx).WithError(websearchErr).Warn("websearch: interception failed, passing request through")
+		} else if websearchResult != nil {
+			payload = websearchResult.ModifiedBody
+		}
 	payload, _ = sjson.DeleteBytes(payload, "generationConfig.maxOutputTokens")
 	payload, _ = sjson.DeleteBytes(payload, "generationConfig.responseMimeType")
 	payload, _ = sjson.DeleteBytes(payload, "generationConfig.responseJsonSchema")

@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 	copilotauth "github.com/router-for-me/CLIProxyAPI/v6/internal/auth/copilot"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/websearch"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/registry"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/thinking"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
@@ -147,6 +148,14 @@ func (e *GitHubCopilotExecutor) Execute(ctx context.Context, auth *cliproxyauth.
 	}
 	requestedModel := payloadRequestedModel(opts, req.Model)
 	body = applyPayloadConfigWithRoot(e.cfg, req.Model, to.String(), "", body, originalTranslated, requestedModel)
+
+		// Web search interception: intercept web_search tool calls and execute via SearXNG
+		websearchResult, websearchErr := websearch.InterceptRequest(ctx, e.cfg, body, to.String(), req.Model)
+		if websearchErr != nil {
+			logWithRequestID(ctx).WithError(websearchErr).Warn("websearch: interception failed, passing request through")
+		} else if websearchResult != nil {
+			body = websearchResult.ModifiedBody
+		}
 	body, _ = sjson.SetBytes(body, "stream", false)
 
 	path := githubCopilotChatPath
@@ -277,6 +286,14 @@ func (e *GitHubCopilotExecutor) ExecuteStream(ctx context.Context, auth *cliprox
 	}
 	requestedModel := payloadRequestedModel(opts, req.Model)
 	body = applyPayloadConfigWithRoot(e.cfg, req.Model, to.String(), "", body, originalTranslated, requestedModel)
+
+		// Web search interception: intercept web_search tool calls and execute via SearXNG
+		websearchResult, websearchErr := websearch.InterceptRequest(ctx, e.cfg, body, to.String(), req.Model)
+		if websearchErr != nil {
+			logWithRequestID(ctx).WithError(websearchErr).Warn("websearch: interception failed, passing request through")
+		} else if websearchResult != nil {
+			body = websearchResult.ModifiedBody
+		}
 	body, _ = sjson.SetBytes(body, "stream", true)
 	// Enable stream options for usage stats in stream
 	if !useResponses {
