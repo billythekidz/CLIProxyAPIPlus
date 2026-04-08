@@ -118,6 +118,11 @@ type Config struct {
 	// This section is configuration-only for now; runtime wiring is added incrementally.
 	ContextMemory ContextMemoryConfig `yaml:"context-memory" json:"context-memory"`
 
+	// WebSearch controls the universal proxy-managed web search feature.
+	// When enabled, the proxy intercepts web_search tool calls across all models
+	// and executes them via SearXNG instead of relying on provider-native search.
+	WebSearch WebSearchConfig `yaml:"web-search" json:"web-search"`
+
 	// OAuthExcludedModels defines per-provider global model exclusions applied to OAuth/file-backed auth entries.
 	// Supported channels: gemini-cli, vertex, aistudio, antigravity, claude, codex, qwen, iflow, kiro, github-copilot.
 	OAuthExcludedModels map[string][]string `yaml:"oauth-excluded-models,omitempty" json:"oauth-excluded-models,omitempty"`
@@ -744,6 +749,9 @@ func LoadConfigOptional(configFile string, optional bool) (*Config, error) {
 
 	// Validate raw payload rules and drop invalid entries.
 	cfg.SanitizePayloadRules()
+
+	// Normalize universal web search settings.
+	cfg.SanitizeWebSearch()
 
 	// NOTE: Legacy migration persistence is intentionally disabled together with
 	// startup legacy migration to keep startup read-only for config.yaml.
