@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/runtime/identity"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/thinking"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/util"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/websearch"
@@ -141,6 +142,7 @@ func (e *OpenAICompatExecutor) Execute(ctx context.Context, auth *cliproxyauth.A
 		authLabel = auth.Label
 		authType, authValue = auth.AccountInfo()
 	}
+	injectPerplexityIdentity(httpReq, authID, opts)
 	recordAPIRequest(ctx, e.cfg, upstreamRequestLog{
 		URL:       url,
 		Method:    http.MethodPost,
@@ -252,6 +254,7 @@ func (e *OpenAICompatExecutor) ExecuteStream(ctx context.Context, auth *cliproxy
 		authLabel = auth.Label
 		authType, authValue = auth.AccountInfo()
 	}
+	injectPerplexityIdentity(httpReq, authID, opts)
 	recordAPIRequest(ctx, e.cfg, upstreamRequestLog{
 		URL:       url,
 		Method:    http.MethodPost,
@@ -404,6 +407,46 @@ func (e *OpenAICompatExecutor) overrideModel(payload []byte, model string) []byt
 	}
 	payload, _ = sjson.SetBytes(payload, "model", model)
 	return payload
+}
+
+// isPerplexityLikeURL returns true if the upstream URL points to a Perplexity-compatible service.
+func isPerplexityLikeURL(url string) bool {
+	return strings.Contains(strings.ToLower(url), "perplexity")
+}
+
+// injectPerplexityIdentity derives Perplexity routing headers from auth + session metadata
+// and attaches them to the outgoing request. Only applied when the upstream URL looks like Perplexity.
+func injectPerplexityIdentity(httpReq *http.Request, authID string, opts cliproxyexecutor.Options) {
+	if httpReq == nil || !isPerplexityLikeURL(httpReq.URL.String()) {
+		return
+	}
+
+	callerKey := strings.TrimSpace(authID)
+	if callerKey == "" {
+		callerKey = "-"
+	}
+
+	sessionID := ""
+	if opts.Metadata != nil {
+		if v, ok := opts.Metadata[cliproxyexecutor.ExecutionSessionMetadataKey].(string); ok {
+			sessionID = strings.TrimSpace(v)
+		}
+	}
+
+	perp := identity.DerivePerplexityIdentity(identity.PerplexityInput{
+		CallerKey: callerKey,
+		SessionID: sessionID,
+	})
+
+	httpReq.Header.Set("X-Session-ID", perp.SessionID)
+	httpReq.Header.Set("X-Thread-ID", perp.ThreadID)
+	httpReq.Header.Set("X-Perplexity-Frontend-Context-UUID", perp.FrontendContextUUID)
+	httpReq.Header.Set("X-Perplexity-Thread-Sources", perp.Source)
+
+	logWithRequestID(httpReq.Context()).Debugf(
+		"perplexity identity: thread=%s session=%s context=%s source=%s",
+		perp.ThreadID, perp.SessionID, perp.FrontendContextUUID, perp.Source,
+	)
 }
 
 type statusErr struct {

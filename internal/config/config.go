@@ -72,6 +72,10 @@ type Config struct {
 	// MaxRetryInterval defines the maximum wait time in seconds before retrying a cooled-down credential.
 	MaxRetryInterval int `yaml:"max-retry-interval" json:"max-retry-interval"`
 
+	// MaxRetryCredentials limits the number of credentials to attempt before giving up on a request.
+	// 0 means no limit (use all available credentials). Default is 0.
+	MaxRetryCredentials int `yaml:"max-retry-credentials" json:"max-retry-credentials"`
+
 	// QuotaExceeded defines the behavior when a quota is exceeded.
 	QuotaExceeded QuotaExceeded `yaml:"quota-exceeded" json:"quota-exceeded"`
 
@@ -91,8 +95,14 @@ type Config struct {
 	// Values: "ide" (default, CodeWhisperer) or "cli" (Amazon Q).
 	KiroPreferredEndpoint string `yaml:"kiro-preferred-endpoint" json:"kiro-preferred-endpoint"`
 
+	// KiroFingerprint configures fingerprint overrides for Kiro API requests.
+	KiroFingerprint *KiroFingerprintConfig `yaml:"kiro-fingerprint,omitempty" json:"kiro-fingerprint,omitempty"`
+
 	// Codex defines a list of Codex API key configurations as specified in the YAML configuration file.
 	CodexKey []CodexKey `yaml:"codex-api-key" json:"codex-api-key"`
+
+	// CodexHeaderDefaults configures default header values for Codex WebSocket API requests.
+	CodexHeaderDefaults CodexHeaderDefaultsConfig `yaml:"codex-header-defaults" json:"codex-header-defaults"`
 
 	// ClaudeKey defines a list of Claude API key configurations as specified in the YAML configuration file.
 	ClaudeKey []ClaudeKey `yaml:"claude-api-key" json:"claude-api-key"`
@@ -149,10 +159,21 @@ type Config struct {
 // ClaudeHeaderDefaults configures default header values injected into Claude API requests
 // when the client does not send them. Update these when Claude Code releases a new version.
 type ClaudeHeaderDefaults struct {
-	UserAgent      string `yaml:"user-agent" json:"user-agent"`
-	PackageVersion string `yaml:"package-version" json:"package-version"`
-	RuntimeVersion string `yaml:"runtime-version" json:"runtime-version"`
-	Timeout        string `yaml:"timeout" json:"timeout"`
+	UserAgent             string  `yaml:"user-agent" json:"user-agent"`
+	PackageVersion        string  `yaml:"package-version" json:"package-version"`
+	RuntimeVersion        string  `yaml:"runtime-version" json:"runtime-version"`
+	Timeout               string  `yaml:"timeout" json:"timeout"`
+	StabilizeDeviceProfile *bool   `yaml:"stabilize-device-profile,omitempty" json:"stabilize-device-profile,omitempty"`
+	OS                    string  `yaml:"os,omitempty" json:"os,omitempty"`
+	Arch                  string  `yaml:"arch,omitempty" json:"arch,omitempty"`
+}
+
+// CodexHeaderDefaultsConfig configures default header values for Codex WebSocket API requests.
+type CodexHeaderDefaultsConfig struct {
+	// UserAgent is the default User-Agent header for Codex WebSocket requests.
+	UserAgent string `yaml:"user-agent,omitempty" json:"user-agent,omitempty"`
+	// BetaFeatures is the default Beta-Features header for Codex WebSocket requests.
+	BetaFeatures string `yaml:"beta-features,omitempty" json:"beta-features,omitempty"`
 }
 
 // TLSConfig holds HTTPS server settings.
@@ -524,6 +545,26 @@ type KiroKey struct {
 	// PreferredEndpoint sets the preferred Kiro API endpoint/quota.
 	// Values: "codewhisperer" (default, IDE quota) or "amazonq" (CLI quota).
 	PreferredEndpoint string `yaml:"preferred-endpoint,omitempty" json:"preferred-endpoint,omitempty"`
+}
+
+// KiroFingerprintConfig configures fingerprint overrides for Kiro API requests.
+type KiroFingerprintConfig struct {
+	// OIDCSDKVersion overrides the AWS SDK JS version used in OIDC requests.
+	OIDCSDKVersion string `yaml:"oidc-sdk-version,omitempty" json:"oidc-sdk-version,omitempty"`
+	// RuntimeSDKVersion overrides the runtime API SDK version.
+	RuntimeSDKVersion string `yaml:"runtime-sdk-version,omitempty" json:"runtime-sdk-version,omitempty"`
+	// StreamingSDKVersion overrides the streaming API SDK version.
+	StreamingSDKVersion string `yaml:"streaming-sdk-version,omitempty" json:"streaming-sdk-version,omitempty"`
+	// OSType overrides the OS type (darwin, windows, linux).
+	OSType string `yaml:"os-type,omitempty" json:"os-type,omitempty"`
+	// OSVersion overrides the OS version string.
+	OSVersion string `yaml:"os-version,omitempty" json:"os-version,omitempty"`
+	// NodeVersion overrides the Node.js version.
+	NodeVersion string `yaml:"node-version,omitempty" json:"node-version,omitempty"`
+	// KiroVersion overrides the Kiro IDE version.
+	KiroVersion string `yaml:"kiro-version,omitempty" json:"kiro-version,omitempty"`
+	// KiroHash overrides the Kiro IDE hash.
+	KiroHash string `yaml:"kiro-hash,omitempty" json:"kiro-hash,omitempty"`
 }
 
 // OpenAICompatibility represents the configuration for OpenAI API compatibility

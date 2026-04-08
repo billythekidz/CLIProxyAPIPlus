@@ -6,6 +6,14 @@ const (
 	// Kiro API limit is 10240 bytes, leave room for "..."
 	KiroMaxToolDescLen = 10237
 
+	// MinToolDescriptionLength is the minimum length for a compressed tool description.
+	// Descriptions shorter than this are not compressed further to maintain usefulness.
+	MinToolDescriptionLength = 50
+
+	// ToolCompressionTargetSize is the target maximum size in bytes for the serialized
+	// tools payload. When tools exceed this size, compression is applied.
+	ToolCompressionTargetSize = 51200
+
 	// ThinkingStartTag is the start tag for thinking blocks in responses.
 	ThinkingStartTag = "<thinking>"
 

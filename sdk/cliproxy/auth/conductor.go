@@ -503,6 +503,12 @@ func (m *Manager) Load(ctx context.Context) error {
 	return nil
 }
 
+// applyContextMemoryPreExecutor is a placeholder for context-memory pre-execution hooks.
+// It returns the request and options unchanged until the full context-memory feature is wired.
+func (m *Manager) applyContextMemoryPreExecutor(_ context.Context, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (cliproxyexecutor.Request, cliproxyexecutor.Options) {
+	return req, opts
+}
+
 // Execute performs a non-streaming execution using the configured selector and executor.
 // It supports multiple providers for the same model and round-robins the starting provider per model.
 func (m *Manager) Execute(ctx context.Context, providers []string, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (cliproxyexecutor.Response, error) {

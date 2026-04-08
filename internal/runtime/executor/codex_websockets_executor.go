@@ -36,6 +36,7 @@ const (
 	codexResponsesWebsocketBetaHeaderValue = "responses_websockets=2026-02-06"
 	codexResponsesWebsocketIdleTimeout     = 5 * time.Minute
 	codexResponsesWebsocketHandshakeTO     = 30 * time.Second
+	codexOriginator                        = "Codex Desktop"
 )
 
 // CodexWebsocketsExecutor executes Codex Responses requests using a WebSocket transport.
