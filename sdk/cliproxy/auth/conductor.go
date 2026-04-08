@@ -383,7 +383,7 @@ func compileAPIKeyModelAliasForModels[T interface {
 }
 
 // SetRetryConfig updates retry attempts and cooldown wait interval.
-func (m *Manager) SetRetryConfig(retry int, maxRetryInterval time.Duration) {
+func (m *Manager) SetRetryConfig(retry int, maxRetryInterval time.Duration, maxRetryCredentials ...int) {
 	if m == nil {
 		return
 	}
@@ -395,6 +395,7 @@ func (m *Manager) SetRetryConfig(retry int, maxRetryInterval time.Duration) {
 	}
 	m.requestRetry.Store(int32(retry))
 	m.maxRetryInterval.Store(maxRetryInterval.Nanoseconds())
+	// maxRetryCredentials is accepted for API compatibility but not yet enforced.
 }
 
 // RegisterExecutor registers a provider executor with the manager.
@@ -507,6 +508,12 @@ func (m *Manager) Load(ctx context.Context) error {
 // It returns the request and options unchanged until the full context-memory feature is wired.
 func (m *Manager) applyContextMemoryPreExecutor(_ context.Context, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (cliproxyexecutor.Request, cliproxyexecutor.Options) {
 	return req, opts
+}
+
+// RefreshSchedulerEntry refreshes the scheduler entry for the given auth ID.
+// This is a no-op placeholder until the full scheduler refresh feature is wired.
+func (m *Manager) RefreshSchedulerEntry(_ string) {
+	// No-op: scheduler refresh not yet implemented
 }
 
 // Execute performs a non-streaming execution using the configured selector and executor.
