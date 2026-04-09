@@ -142,7 +142,7 @@ func (e *OpenAICompatExecutor) Execute(ctx context.Context, auth *cliproxyauth.A
 		authLabel = auth.Label
 		authType, authValue = auth.AccountInfo()
 	}
-	injectPerplexityIdentity(httpReq, authID, opts)
+	injectPerplexityIdentity(httpReq, e.provider, authID, opts)
 	recordAPIRequest(ctx, e.cfg, upstreamRequestLog{
 		URL:       url,
 		Method:    http.MethodPost,
@@ -254,7 +254,7 @@ func (e *OpenAICompatExecutor) ExecuteStream(ctx context.Context, auth *cliproxy
 		authLabel = auth.Label
 		authType, authValue = auth.AccountInfo()
 	}
-	injectPerplexityIdentity(httpReq, authID, opts)
+	injectPerplexityIdentity(httpReq, e.provider, authID, opts)
 	recordAPIRequest(ctx, e.cfg, upstreamRequestLog{
 		URL:       url,
 		Method:    http.MethodPost,
@@ -409,15 +409,15 @@ func (e *OpenAICompatExecutor) overrideModel(payload []byte, model string) []byt
 	return payload
 }
 
-// isPerplexityLikeURL returns true if the upstream URL points to a Perplexity-compatible service.
-func isPerplexityLikeURL(url string) bool {
-	return strings.Contains(strings.ToLower(url), "perplexity")
+// isPerplexityLikeProvider returns true if the provider name indicates Perplexity.
+func isPerplexityLikeProvider(provider string) bool {
+	return strings.Contains(strings.ToLower(provider), "perplexity")
 }
 
 // injectPerplexityIdentity derives Perplexity routing headers from auth + session metadata
-// and attaches them to the outgoing request. Only applied when the upstream URL looks like Perplexity.
-func injectPerplexityIdentity(httpReq *http.Request, authID string, opts cliproxyexecutor.Options) {
-	if httpReq == nil || !isPerplexityLikeURL(httpReq.URL.String()) {
+// and attaches them to the outgoing request. Only applied when the provider is Perplexity-like.
+func injectPerplexityIdentity(httpReq *http.Request, provider, authID string, opts cliproxyexecutor.Options) {
+	if httpReq == nil || !isPerplexityLikeProvider(provider) {
 		return
 	}
 
