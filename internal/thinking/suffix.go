@@ -11,36 +11,45 @@ import (
 
 // ParseSuffix extracts thinking suffix from a model name.
 //
-// The suffix format is: model-name(value)
-// Examples:
+// The suffix format is: model-name(value) or model-name[value]
+// Parentheses format:
 //   - "claude-sonnet-4-5(16384)" -> ModelName="claude-sonnet-4-5", RawSuffix="16384"
 //   - "gpt-5.2(high)" -> ModelName="gpt-5.2", RawSuffix="high"
+// Square brackets format (Claude Code thinking budget):
+//   - "qwopus-27b[1m]" -> ModelName="qwopus-27b", RawSuffix="1m"
+//   - "gemini-2.5-pro[1m]" -> ModelName="gemini-2.5-pro", RawSuffix="1m"
+// No suffix:
 //   - "gemini-2.5-pro" -> ModelName="gemini-2.5-pro", HasSuffix=false
 //
 // This function only extracts the suffix; it does not validate or interpret
 // the suffix content. Use ParseNumericSuffix, ParseLevelSuffix, etc. for
 // content interpretation.
 func ParseSuffix(model string) SuffixResult {
-	// Find the last opening parenthesis
+	// Try parentheses format first: model-name(value)
 	lastOpen := strings.LastIndex(model, "(")
-	if lastOpen == -1 {
-		return SuffixResult{ModelName: model, HasSuffix: false}
+	if lastOpen != -1 && strings.HasSuffix(model, ")") {
+		modelName := model[:lastOpen]
+		rawSuffix := model[lastOpen+1 : len(model)-1]
+		return SuffixResult{
+			ModelName: modelName,
+			HasSuffix: true,
+			RawSuffix: rawSuffix,
+		}
 	}
 
-	// Check if the string ends with a closing parenthesis
-	if !strings.HasSuffix(model, ")") {
-		return SuffixResult{ModelName: model, HasSuffix: false}
+	// Try square brackets format: model-name[value]
+	lastBracket := strings.LastIndex(model, "[")
+	if lastBracket != -1 && strings.HasSuffix(model, "]") {
+		modelName := model[:lastBracket]
+		rawSuffix := model[lastBracket+1 : len(model)-1]
+		return SuffixResult{
+			ModelName: modelName,
+			HasSuffix: true,
+			RawSuffix: rawSuffix,
+		}
 	}
 
-	// Extract components
-	modelName := model[:lastOpen]
-	rawSuffix := model[lastOpen+1 : len(model)-1]
-
-	return SuffixResult{
-		ModelName: modelName,
-		HasSuffix: true,
-		RawSuffix: rawSuffix,
-	}
+	return SuffixResult{ModelName: model, HasSuffix: false}
 }
 
 // ParseNumericSuffix attempts to parse a raw suffix as a numeric budget value.
