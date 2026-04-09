@@ -13,6 +13,7 @@ import (
 
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/registry"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/runtime/executor/helps"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/thinking"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/util"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/websearch"
@@ -100,7 +101,7 @@ func (e *KiloExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, req
 		// Web search interception: intercept web_search tool calls and execute via SearXNG
 		websearchResult, websearchErr := websearch.InterceptRequest(ctx, e.cfg, translated, to.String(), baseModel)
 		if websearchErr != nil {
-			logWithRequestID(ctx).WithError(websearchErr).Warn("websearch: interception failed, passing request through")
+			helps.LogWithRequestID(ctx).WithError(websearchErr).Warn("websearch: interception failed, passing request through")
 		} else if websearchResult != nil {
 			translated = websearchResult.ModifiedBody
 		}
@@ -205,7 +206,7 @@ func (e *KiloExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Aut
 		// Web search interception: intercept web_search tool calls and execute via SearXNG
 		websearchResult, websearchErr := websearch.InterceptRequest(ctx, e.cfg, translated, to.String(), baseModel)
 		if websearchErr != nil {
-			logWithRequestID(ctx).WithError(websearchErr).Warn("websearch: interception failed, passing request through")
+			helps.LogWithRequestID(ctx).WithError(websearchErr).Warn("websearch: interception failed, passing request through")
 		} else if websearchResult != nil {
 			translated = websearchResult.ModifiedBody
 		}
