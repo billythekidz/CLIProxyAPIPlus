@@ -9,10 +9,14 @@ package openai
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	. "github.com/router-for-me/CLIProxyAPI/v6/internal/constant"
@@ -260,9 +264,37 @@ func (h *OpenAIResponsesAPIHandler) Responses(c *gin.Context) {
 	streamResult := gjson.GetBytes(rawJSON, "stream")
 	stream := streamResult.Type == gjson.True
 
+	// [DEBUG]
+	userAgent := c.Request.Header.Get("User-Agent")
+	originalUser := gjson.GetBytes(rawJSON, "user").String()
+	log.Printf("[DEBUG-Mattermost-Responses] Incoming Responses: User-Agent: %s, UserField: %s\n", userAgent, originalUser)
+
+	isMattermost := strings.Contains(strings.ToLower(userAgent), "mattermost") ||
+		strings.Contains(strings.ToLower(userAgent), "go-http-client") ||
+		strings.Contains(originalUser, "XOVIET")
+
+	var mattermostSessionID string
+	if isMattermost {
+		if originalUser != "" {
+			hash := sha256.Sum256([]byte(originalUser))
+			mattermostSessionID = hex.EncodeToString(hash[:])
+		} else {
+			mattermostSessionID = "7ecf014e3650cfdf6697eedcd8f5e9da8b63faece8bdf2168393e1b7db7efba3"
+		}
+		if updated, err := sjson.SetBytes(rawJSON, "cliProxySessionOverride", mattermostSessionID); err == nil {
+			rawJSON = updated
+		}
+	}
+
 	modelName := gjson.GetBytes(rawJSON, "model").String()
 	if overrideEndpoint, ok := resolveEndpointOverride(modelName, openAIResponsesEndpoint); ok && overrideEndpoint == openAIChatEndpoint {
 		chatJSON := responsesconverter.ConvertOpenAIResponsesRequestToOpenAIChatCompletions(modelName, rawJSON, stream)
+		if isMattermost && mattermostSessionID != "" {
+			if updated, err := sjson.SetBytes(chatJSON, "cliProxySessionOverride", mattermostSessionID); err == nil {
+				chatJSON = updated
+			}
+		}
+
 		stream = gjson.GetBytes(chatJSON, "stream").Bool()
 		if stream {
 			h.handleStreamingResponseViaChat(c, rawJSON, chatJSON)

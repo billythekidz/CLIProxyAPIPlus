@@ -33,6 +33,15 @@ func DerivePerplexityIdentity(in PerplexityInput) PerplexityIdentity {
 	}
 	sessionID := strings.TrimSpace(in.SessionID)
 
+	if sessionID == "" {
+		return PerplexityIdentity{
+			SessionID:           "",
+			ThreadID:            "",
+			FrontendContextUUID: "",
+			Source:              "passthrough:no-session",
+		}
+	}
+
 	// Thread seed is callerKey + sessionID — no message content.
 	// Same caller + same session = same thread, even if model differs.
 	threadSeed := callerKey + "|" + sessionID
@@ -48,15 +57,10 @@ func DerivePerplexityIdentity(in PerplexityInput) PerplexityIdentity {
 		hex.EncodeToString(contextHash[8:10]) + "-" +
 		hex.EncodeToString(contextHash[10:16])
 
-	source := "derived"
-	if sessionID == "" {
-		source = "derived:no-session"
-	}
-
 	return PerplexityIdentity{
 		SessionID:           sessionID,
 		ThreadID:            threadID,
 		FrontendContextUUID: frontendContextUUID,
-		Source:              source,
+		Source:              "derived",
 	}
 }

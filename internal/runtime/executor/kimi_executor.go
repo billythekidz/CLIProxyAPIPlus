@@ -93,8 +93,16 @@ func (e *KimiExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, req
 		originalPayloadSource = opts.OriginalRequest
 	}
 	originalPayload := bytes.Clone(originalPayloadSource)
-	originalTranslated := sdktranslator.TranslateRequest(from, to, baseModel, originalPayload, false)
-	body := sdktranslator.TranslateRequest(from, to, baseModel, bytes.Clone(req.Payload), false)
+	
+	var body []byte
+	if !e.cfg.PreProcessDashboard.IsEnableTranslator() {
+		body = req.Payload
+	} else {
+		originalTranslated := sdktranslator.TranslateRequest(from, to, baseModel, originalPayload, false)
+		body = sdktranslator.TranslateRequest(from, to, baseModel, bytes.Clone(req.Payload), false)
+		requestedModel := helps.PayloadRequestedModel(opts, req.Model)
+		body = helps.ApplyPayloadConfigWithRoot(e.cfg, baseModel, to.String(), "", body, originalTranslated, requestedModel)
+	}
 
 	// Strip kimi- prefix for upstream API
 	upstreamModel := stripKimiPrefix(baseModel)
@@ -103,19 +111,19 @@ func (e *KimiExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, req
 		return resp, fmt.Errorf("kimi executor: failed to set model in payload: %w", err)
 	}
 
-	body, err = thinking.ApplyThinking(body, req.Model, from.String(), "kimi", e.Identifier())
-	if err != nil {
-		return resp, err
-	}
+	if e.cfg.PreProcessDashboard.IsEnableAuxLogic() {
+		body, err = thinking.ApplyThinking(body, req.Model, from.String(), "kimi", e.Identifier())
+		if err != nil {
+			return resp, err
+		}
 
-	requestedModel := helps.PayloadRequestedModel(opts, req.Model)
-	body = helps.ApplyPayloadConfigWithRoot(e.cfg, baseModel, to.String(), "", body, originalTranslated, requestedModel)
-	// Web search interception: intercept web_search tool calls and execute via SearXNG
-	websearchResult, websearchErr := websearch.InterceptRequest(ctx, e.cfg, body, to.String(), baseModel)
-	if websearchErr != nil {
-		helps.LogWithRequestID(ctx).WithError(websearchErr).Warn("websearch: interception failed, passing request through")
-	} else if websearchResult != nil {
-		body = websearchResult.ModifiedBody
+		// Web search interception: intercept web_search tool calls and execute via SearXNG
+		websearchResult, websearchErr := websearch.InterceptRequest(ctx, e.cfg, body, to.String(), baseModel)
+		if websearchErr != nil {
+			helps.LogWithRequestID(ctx).WithError(websearchErr).Warn("websearch: interception failed, passing request through")
+		} else if websearchResult != nil {
+			body = websearchResult.ModifiedBody
+		}
 	}
 	body, err = normalizeKimiToolMessageLinks(body)
 	if err != nil {
@@ -205,8 +213,16 @@ func (e *KimiExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Aut
 		originalPayloadSource = opts.OriginalRequest
 	}
 	originalPayload := bytes.Clone(originalPayloadSource)
-	originalTranslated := sdktranslator.TranslateRequest(from, to, baseModel, originalPayload, true)
-	body := sdktranslator.TranslateRequest(from, to, baseModel, bytes.Clone(req.Payload), true)
+	
+	var body []byte
+	if !e.cfg.PreProcessDashboard.IsEnableTranslator() {
+		body = req.Payload
+	} else {
+		originalTranslated := sdktranslator.TranslateRequest(from, to, baseModel, originalPayload, true)
+		body = sdktranslator.TranslateRequest(from, to, baseModel, bytes.Clone(req.Payload), true)
+		requestedModel := helps.PayloadRequestedModel(opts, req.Model)
+		body = helps.ApplyPayloadConfigWithRoot(e.cfg, baseModel, to.String(), "", body, originalTranslated, requestedModel)
+	}
 
 	// Strip kimi- prefix for upstream API
 	upstreamModel := stripKimiPrefix(baseModel)
@@ -215,23 +231,24 @@ func (e *KimiExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Aut
 		return nil, fmt.Errorf("kimi executor: failed to set model in payload: %w", err)
 	}
 
-	body, err = thinking.ApplyThinking(body, req.Model, from.String(), "kimi", e.Identifier())
-	if err != nil {
-		return nil, err
-	}
-
 	body, err = sjson.SetBytes(body, "stream_options.include_usage", true)
 	if err != nil {
 		return nil, fmt.Errorf("kimi executor: failed to set stream_options in payload: %w", err)
 	}
-	requestedModel := helps.PayloadRequestedModel(opts, req.Model)
-	body = helps.ApplyPayloadConfigWithRoot(e.cfg, baseModel, to.String(), "", body, originalTranslated, requestedModel)
-	// Web search interception: intercept web_search tool calls and execute via SearXNG
-	websearchResult, websearchErr := websearch.InterceptRequest(ctx, e.cfg, body, to.String(), baseModel)
-	if websearchErr != nil {
-		helps.LogWithRequestID(ctx).WithError(websearchErr).Warn("websearch: interception failed, passing request through")
-	} else if websearchResult != nil {
-		body = websearchResult.ModifiedBody
+
+	if e.cfg.PreProcessDashboard.IsEnableAuxLogic() {
+		body, err = thinking.ApplyThinking(body, req.Model, from.String(), "kimi", e.Identifier())
+		if err != nil {
+			return nil, err
+		}
+
+		// Web search interception: intercept web_search tool calls and execute via SearXNG
+		websearchResult, websearchErr := websearch.InterceptRequest(ctx, e.cfg, body, to.String(), baseModel)
+		if websearchErr != nil {
+			helps.LogWithRequestID(ctx).WithError(websearchErr).Warn("websearch: interception failed, passing request through")
+		} else if websearchResult != nil {
+			body = websearchResult.ModifiedBody
+		}
 	}
 	body, err = normalizeKimiToolMessageLinks(body)
 	if err != nil {

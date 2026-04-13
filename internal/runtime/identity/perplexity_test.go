@@ -58,11 +58,11 @@ func TestDerplexityIdentity_NoSession(t *testing.T) {
 	if id.SessionID != "" {
 		t.Fatalf("expected empty session_id, got %q", id.SessionID)
 	}
-	if id.Source != "derived:no-session" {
-		t.Fatalf("expected derived:no-session source, got %q", id.Source)
+	if id.Source != "passthrough:no-session" {
+		t.Fatalf("expected passthrough:no-session source, got %q", id.Source)
 	}
-	if id.ThreadID == "" {
-		t.Fatal("thread_id should still be produced")
+	if id.ThreadID != "" {
+		t.Fatalf("thread_id should not be produced, got %q", id.ThreadID)
 	}
 }
 

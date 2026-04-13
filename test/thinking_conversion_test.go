@@ -1357,7 +1357,7 @@ func TestThinkingE2EMatrix_Suffix(t *testing.T) {
 			expectValue: "none",
 			expectErr:   false,
 		},
-		// Case 115: OpenAI to gpt-5.2, level xhigh → xhigh
+		// Case 115: OpenAI to gpt-5.2, level xhigh → clamped to high due to gpt- rule
 		{
 			name:        "115",
 			from:        "openai",
@@ -1365,7 +1365,7 @@ func TestThinkingE2EMatrix_Suffix(t *testing.T) {
 			model:       "gpt-5.2(xhigh)",
 			inputJSON:   `{"model":"gpt-5.2(xhigh)","messages":[{"role":"user","content":"hi"}]}`,
 			expectField: "reasoning_effort",
-			expectValue: "xhigh",
+			expectValue: "high",
 			expectErr:   false,
 		},
 		// Case 116: OpenAI to gpt-5, level xhigh (out of range) → error
@@ -1403,7 +1403,7 @@ func TestThinkingE2EMatrix_Suffix(t *testing.T) {
 			expectValue: "high",
 			expectErr:   false,
 		},
-		// Case 119: OpenAI-Response to gpt-5.2-codex, level xhigh → xhigh
+		// Case 119: OpenAI-Response to gpt-5.2-codex, level xhigh → clamped to high due to gpt- rule
 		{
 			name:        "119",
 			from:        "openai-response",
@@ -1411,7 +1411,7 @@ func TestThinkingE2EMatrix_Suffix(t *testing.T) {
 			model:       "gpt-5.2-codex(xhigh)",
 			inputJSON:   `{"model":"gpt-5.2-codex(xhigh)","input":[{"role":"user","content":"hi"}]}`,
 			expectField: "reasoning.effort",
-			expectValue: "xhigh",
+			expectValue: "high",
 			expectErr:   false,
 		},
 		// Case 120: OpenAI-Response to gpt-5.2-codex, level none → none
@@ -2744,7 +2744,7 @@ func TestThinkingE2EMatrix_Body(t *testing.T) {
 			expectValue: "none",
 			expectErr:   false,
 		},
-		// Case 115: OpenAI to gpt-5.2, reasoning_effort=xhigh → xhigh
+		// Case 115: OpenAI to gpt-5.2, reasoning_effort=xhigh → clamped to high due to gpt- rule
 		{
 			name:        "115",
 			from:        "openai",
@@ -2752,7 +2752,7 @@ func TestThinkingE2EMatrix_Body(t *testing.T) {
 			model:       "gpt-5.2",
 			inputJSON:   `{"model":"gpt-5.2","messages":[{"role":"user","content":"hi"}],"reasoning_effort":"xhigh"}`,
 			expectField: "reasoning_effort",
-			expectValue: "xhigh",
+			expectValue: "high",
 			expectErr:   false,
 		},
 		// Case 116: OpenAI to gpt-5, reasoning_effort=xhigh (out of range) → error
@@ -2790,7 +2790,7 @@ func TestThinkingE2EMatrix_Body(t *testing.T) {
 			expectValue: "high",
 			expectErr:   false,
 		},
-		// Case 119: OpenAI-Response to gpt-5.2-codex, reasoning.effort=xhigh → xhigh
+		// Case 119: OpenAI-Response to gpt-5.2-codex, reasoning.effort=xhigh → clamped to high due to gpt- rule
 		{
 			name:        "119",
 			from:        "openai-response",
@@ -2798,7 +2798,7 @@ func TestThinkingE2EMatrix_Body(t *testing.T) {
 			model:       "gpt-5.2-codex",
 			inputJSON:   `{"model":"gpt-5.2-codex","input":[{"role":"user","content":"hi"}],"reasoning":{"effort":"xhigh"}}`,
 			expectField: "reasoning.effort",
-			expectValue: "xhigh",
+			expectValue: "high",
 			expectErr:   false,
 		},
 		// Case 120: OpenAI-Response to gpt-5.2-codex, reasoning.effort=none → none

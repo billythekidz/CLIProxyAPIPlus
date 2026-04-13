@@ -123,17 +123,25 @@ func (e *GeminiExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, r
 		originalPayloadSource = opts.OriginalRequest
 	}
 	originalPayload := originalPayloadSource
-	originalTranslated := sdktranslator.TranslateRequest(from, to, baseModel, originalPayload, false)
-	body := sdktranslator.TranslateRequest(from, to, baseModel, req.Payload, false)
-
-	body, err = thinking.ApplyThinking(body, req.Model, from.String(), to.String(), e.Identifier())
-	if err != nil {
-		return resp, err
+	
+	var body []byte
+	if !e.cfg.PreProcessDashboard.IsEnableTranslator() {
+		body = req.Payload
+	} else {
+		originalTranslated := sdktranslator.TranslateRequest(from, to, baseModel, originalPayload, false)
+		body = sdktranslator.TranslateRequest(from, to, baseModel, req.Payload, false)
+		
+		body = fixGeminiImageAspectRatio(baseModel, body)
+		requestedModel := helps.PayloadRequestedModel(opts, req.Model)
+		body = helps.ApplyPayloadConfigWithRoot(e.cfg, baseModel, to.String(), "", body, originalTranslated, requestedModel)
 	}
 
-	body = fixGeminiImageAspectRatio(baseModel, body)
-	requestedModel := helps.PayloadRequestedModel(opts, req.Model)
-	body = helps.ApplyPayloadConfigWithRoot(e.cfg, baseModel, to.String(), "", body, originalTranslated, requestedModel)
+	if e.cfg.PreProcessDashboard.IsEnableAuxLogic() {
+		body, err = thinking.ApplyThinking(body, req.Model, from.String(), to.String(), e.Identifier())
+		if err != nil {
+			return resp, err
+		}
+
 		// Web search interception: intercept web_search tool calls and execute via SearXNG
 		websearchResult, websearchErr := websearch.InterceptRequest(ctx, e.cfg, body, to.String(), baseModel)
 		if websearchErr != nil {
@@ -141,6 +149,7 @@ func (e *GeminiExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, r
 		} else if websearchResult != nil {
 			body = websearchResult.ModifiedBody
 		}
+	}
 	body, _ = sjson.SetBytes(body, "model", baseModel)
 
 	action := "generateContent"
@@ -237,17 +246,24 @@ func (e *GeminiExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 		originalPayloadSource = opts.OriginalRequest
 	}
 	originalPayload := originalPayloadSource
-	originalTranslated := sdktranslator.TranslateRequest(from, to, baseModel, originalPayload, true)
-	body := sdktranslator.TranslateRequest(from, to, baseModel, req.Payload, true)
 
-	body, err = thinking.ApplyThinking(body, req.Model, from.String(), to.String(), e.Identifier())
-	if err != nil {
-		return nil, err
+	var body []byte
+	if !e.cfg.PreProcessDashboard.IsEnableTranslator() {
+		body = req.Payload
+	} else {
+		originalTranslated := sdktranslator.TranslateRequest(from, to, baseModel, originalPayload, true)
+		body = sdktranslator.TranslateRequest(from, to, baseModel, req.Payload, true)
+		body = fixGeminiImageAspectRatio(baseModel, body)
+		requestedModel := helps.PayloadRequestedModel(opts, req.Model)
+		body = helps.ApplyPayloadConfigWithRoot(e.cfg, baseModel, to.String(), "", body, originalTranslated, requestedModel)
 	}
 
-	body = fixGeminiImageAspectRatio(baseModel, body)
-	requestedModel := helps.PayloadRequestedModel(opts, req.Model)
-	body = helps.ApplyPayloadConfigWithRoot(e.cfg, baseModel, to.String(), "", body, originalTranslated, requestedModel)
+	if e.cfg.PreProcessDashboard.IsEnableAuxLogic() {
+		body, err = thinking.ApplyThinking(body, req.Model, from.String(), to.String(), e.Identifier())
+		if err != nil {
+			return nil, err
+		}
+
 		// Web search interception: intercept web_search tool calls and execute via SearXNG
 		websearchResult, websearchErr := websearch.InterceptRequest(ctx, e.cfg, body, to.String(), baseModel)
 		if websearchErr != nil {
@@ -255,6 +271,7 @@ func (e *GeminiExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 		} else if websearchResult != nil {
 			body = websearchResult.ModifiedBody
 		}
+	}
 	body, _ = sjson.SetBytes(body, "model", baseModel)
 
 	baseURL := resolveGeminiBaseURL(auth)

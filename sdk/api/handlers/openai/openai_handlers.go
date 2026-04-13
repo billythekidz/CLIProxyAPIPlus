@@ -8,9 +8,13 @@ package openai
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
+	"strings"
 	"sync"
 
 	"github.com/gin-gonic/gin"
@@ -107,6 +111,39 @@ func (h *OpenAIAPIHandler) ChatCompletions(c *gin.Context) {
 			},
 		})
 		return
+	}
+
+	// [Mattermost Detection & Session Override]
+	userAgent := c.Request.Header.Get("User-Agent")
+	originalUser := gjson.GetBytes(rawJSON, "user").String()
+	authHeader := c.Request.Header.Get("Authorization")
+
+	// Debug incoming requests completely
+	log.Printf("[DEBUG-Mattermost] Incoming ChatCompletions: User-Agent: %s, Auth: %s, UserField: %s\n", userAgent, authHeader, originalUser)
+
+	// Some Mattermost plugins send Go-http-client as User-Agent, or contain mattermost.
+	// We also check if the original user string contains XOVIET.
+	isMattermost := strings.Contains(strings.ToLower(userAgent), "mattermost") ||
+		strings.Contains(strings.ToLower(userAgent), "go-http-client") ||
+		strings.Contains(originalUser, "XOVIET")
+
+	if isMattermost {
+		// Use the distinct user field to derive a consistent session for each user
+		var mattermostSessionID string
+		if originalUser != "" {
+			hash := sha256.Sum256([]byte(originalUser))
+			mattermostSessionID = hex.EncodeToString(hash[:])
+		} else {
+			// Fallback session if no user id present
+			mattermostSessionID = "7ecf014e3650cfdf6697eedcd8f5e9da8b63faece8bdf2168393e1b7db7efba3"
+		}
+
+		var updated []byte
+		var err error
+		updated, err = sjson.SetBytes(rawJSON, "cliProxySessionOverride", mattermostSessionID)
+		if err == nil {
+			rawJSON = updated
+		}
 	}
 
 	// Check if the client requested a streaming response.

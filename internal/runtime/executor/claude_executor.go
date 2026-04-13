@@ -118,22 +118,25 @@ func (e *ClaudeExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, r
 		originalPayloadSource = opts.OriginalRequest
 	}
 	originalPayload := originalPayloadSource
-	originalTranslated := sdktranslator.TranslateRequest(from, to, baseModel, originalPayload, stream)
-	body := sdktranslator.TranslateRequest(from, to, baseModel, req.Payload, stream)
-	body, _ = sjson.SetBytes(body, "model", baseModel)
 
-	body, err = thinking.ApplyThinking(body, req.Model, from.String(), to.String(), e.Identifier())
-	if err != nil {
-		return resp, err
+	var body []byte
+	if !e.cfg.PreProcessDashboard.IsEnableTranslator() {
+		body = req.Payload
+		body, _ = sjson.SetBytes(body, "model", baseModel)
+	} else {
+		originalTranslated := sdktranslator.TranslateRequest(from, to, baseModel, originalPayload, stream)
+		body = sdktranslator.TranslateRequest(from, to, baseModel, req.Payload, stream)
+		body, _ = sjson.SetBytes(body, "model", baseModel)
+		
+		requestedModel := helps.PayloadRequestedModel(opts, req.Model)
+		body = helps.ApplyPayloadConfigWithRoot(e.cfg, baseModel, to.String(), "", body, originalTranslated, requestedModel)
 	}
 
-	// Apply cloaking (system prompt injection, fake user ID, sensitive word obfuscation)
-	// based on client type and configuration.
-	body = applyCloaking(ctx, e.cfg, auth, body, baseModel, apiKey)
-
-	requestedModel := helps.PayloadRequestedModel(opts, req.Model)
-	body = helps.ApplyPayloadConfigWithRoot(e.cfg, baseModel, to.String(), "", body, originalTranslated, requestedModel)
-	body = ensureModelMaxTokens(body, baseModel)
+	if e.cfg.PreProcessDashboard.IsEnableAuxLogic() {
+		body, err = thinking.ApplyThinking(body, req.Model, from.String(), to.String(), e.Identifier())
+		if err != nil {
+			return resp, err
+		}
 
 		// Web search interception: intercept web_search tool calls and execute via SearXNG
 		websearchResult, websearchErr := websearch.InterceptRequest(ctx, e.cfg, body, to.String(), baseModel)
@@ -142,6 +145,13 @@ func (e *ClaudeExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, r
 		} else if websearchResult != nil {
 			body = websearchResult.ModifiedBody
 		}
+	}
+
+	// Apply cloaking (system prompt injection, fake user ID, sensitive word obfuscation)
+	// based on client type and configuration.
+	body = applyCloaking(ctx, e.cfg, auth, body, baseModel, apiKey)
+
+	body = ensureModelMaxTokens(body, baseModel)
 
 	// Disable thinking if tool_choice forces tool use (Anthropic API constraint)
 	body = disableThinkingIfToolChoiceForced(body)
@@ -297,22 +307,25 @@ func (e *ClaudeExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 		originalPayloadSource = opts.OriginalRequest
 	}
 	originalPayload := originalPayloadSource
-	originalTranslated := sdktranslator.TranslateRequest(from, to, baseModel, originalPayload, true)
-	body := sdktranslator.TranslateRequest(from, to, baseModel, req.Payload, true)
-	body, _ = sjson.SetBytes(body, "model", baseModel)
 
-	body, err = thinking.ApplyThinking(body, req.Model, from.String(), to.String(), e.Identifier())
-	if err != nil {
-		return nil, err
+	var body []byte
+	if !e.cfg.PreProcessDashboard.IsEnableTranslator() {
+		body = req.Payload
+		body, _ = sjson.SetBytes(body, "model", baseModel)
+	} else {
+		originalTranslated := sdktranslator.TranslateRequest(from, to, baseModel, originalPayload, true)
+		body = sdktranslator.TranslateRequest(from, to, baseModel, req.Payload, true)
+		body, _ = sjson.SetBytes(body, "model", baseModel)
+		
+		requestedModel := helps.PayloadRequestedModel(opts, req.Model)
+		body = helps.ApplyPayloadConfigWithRoot(e.cfg, baseModel, to.String(), "", body, originalTranslated, requestedModel)
 	}
 
-	// Apply cloaking (system prompt injection, fake user ID, sensitive word obfuscation)
-	// based on client type and configuration.
-	body = applyCloaking(ctx, e.cfg, auth, body, baseModel, apiKey)
-
-	requestedModel := helps.PayloadRequestedModel(opts, req.Model)
-	body = helps.ApplyPayloadConfigWithRoot(e.cfg, baseModel, to.String(), "", body, originalTranslated, requestedModel)
-	body = ensureModelMaxTokens(body, baseModel)
+	if e.cfg.PreProcessDashboard.IsEnableAuxLogic() {
+		body, err = thinking.ApplyThinking(body, req.Model, from.String(), to.String(), e.Identifier())
+		if err != nil {
+			return nil, err
+		}
 
 		// Web search interception: intercept web_search tool calls and execute via SearXNG
 		websearchResult, websearchErr := websearch.InterceptRequest(ctx, e.cfg, body, to.String(), baseModel)
@@ -321,6 +334,13 @@ func (e *ClaudeExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 		} else if websearchResult != nil {
 			body = websearchResult.ModifiedBody
 		}
+	}
+
+	// Apply cloaking (system prompt injection, fake user ID, sensitive word obfuscation)
+	// based on client type and configuration.
+	body = applyCloaking(ctx, e.cfg, auth, body, baseModel, apiKey)
+
+	body = ensureModelMaxTokens(body, baseModel)
 
 	// Disable thinking if tool_choice forces tool use (Anthropic API constraint)
 	body = disableThinkingIfToolChoiceForced(body)

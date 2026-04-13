@@ -36,6 +36,9 @@ type Config struct {
 	// TLS config controls HTTPS server settings.
 	TLS TLSConfig `yaml:"tls" json:"tls"`
 
+	// PreProcessDashboard controls the request processing pipeline stages.
+	PreProcessDashboard PreProcessDashboardConfig `yaml:"pre-process" json:"pre-process"`
+
 	// RemoteManagement nests management-related options under 'remote-management'.
 	RemoteManagement RemoteManagement `yaml:"remote-management" json:"-"`
 
@@ -164,9 +167,26 @@ type ClaudeHeaderDefaults struct {
 	PackageVersion        string  `yaml:"package-version" json:"package-version"`
 	RuntimeVersion        string  `yaml:"runtime-version" json:"runtime-version"`
 	Timeout               string  `yaml:"timeout" json:"timeout"`
-	StabilizeDeviceProfile *bool   `yaml:"stabilize-device-profile,omitempty" json:"stabilize-device-profile,omitempty"`
+	StabilizeDeviceProfile *bool  `yaml:"stabilize-device-profile,omitempty" json:"stabilize-device-profile,omitempty"`
 	OS                    string  `yaml:"os,omitempty" json:"os,omitempty"`
 	Arch                  string  `yaml:"arch,omitempty" json:"arch,omitempty"`
+}
+
+// UnmarshalYAML implements custom unmarshaling to trim whitespaces for ClaudeHeaderDefaults.
+func (c *ClaudeHeaderDefaults) UnmarshalYAML(unmarshal func(interface{}) error) error {
+	type plain ClaudeHeaderDefaults
+	var p plain
+	if err := unmarshal(&p); err != nil {
+		return err
+	}
+	c.UserAgent = strings.TrimSpace(p.UserAgent)
+	c.PackageVersion = strings.TrimSpace(p.PackageVersion)
+	c.RuntimeVersion = strings.TrimSpace(p.RuntimeVersion)
+	c.Timeout = strings.TrimSpace(p.Timeout)
+	c.StabilizeDeviceProfile = p.StabilizeDeviceProfile
+	c.OS = strings.TrimSpace(p.OS)
+	c.Arch = strings.TrimSpace(p.Arch)
+	return nil
 }
 
 // CodexHeaderDefaultsConfig configures default header values for Codex WebSocket API requests.
@@ -175,6 +195,18 @@ type CodexHeaderDefaultsConfig struct {
 	UserAgent string `yaml:"user-agent,omitempty" json:"user-agent,omitempty"`
 	// BetaFeatures is the default Beta-Features header for Codex WebSocket requests.
 	BetaFeatures string `yaml:"beta-features,omitempty" json:"beta-features,omitempty"`
+}
+
+// UnmarshalYAML implements custom unmarshaling to trim whitespaces for CodexHeaderDefaultsConfig.
+func (c *CodexHeaderDefaultsConfig) UnmarshalYAML(unmarshal func(interface{}) error) error {
+	type plain CodexHeaderDefaultsConfig
+	var p plain
+	if err := unmarshal(&p); err != nil {
+		return err
+	}
+	c.UserAgent = strings.TrimSpace(p.UserAgent)
+	c.BetaFeatures = strings.TrimSpace(p.BetaFeatures)
+	return nil
 }
 
 // TLSConfig holds HTTPS server settings.
@@ -807,6 +839,9 @@ func LoadConfigOptional(configFile string, optional bool) (*Config, error) {
 
 	// Normalize universal web search settings.
 	cfg.SanitizeWebSearch()
+
+	// Apply Pre-process overrides
+	cfg.PreProcessDashboard.LoadEnvOverrides()
 
 	// NOTE: Legacy migration persistence is intentionally disabled together with
 	// startup legacy migration to keep startup read-only for config.yaml.

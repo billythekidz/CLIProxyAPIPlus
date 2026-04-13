@@ -85,7 +85,7 @@ func TestApplyCodexWebsocketHeadersPassesThroughClientIdentityHeaders(t *testing
 
 func TestApplyCodexWebsocketHeadersUsesConfigDefaultsForOAuth(t *testing.T) {
 	cfg := &config.Config{
-		CodexHeaderDefaults: config.CodexHeaderDefaults{
+		CodexHeaderDefaults: config.CodexHeaderDefaultsConfig{
 			UserAgent:    "my-codex-client/1.0",
 			BetaFeatures: "feature-a,feature-b",
 		},
@@ -110,7 +110,7 @@ func TestApplyCodexWebsocketHeadersUsesConfigDefaultsForOAuth(t *testing.T) {
 
 func TestApplyCodexWebsocketHeadersPrefersExistingHeadersOverClientAndConfig(t *testing.T) {
 	cfg := &config.Config{
-		CodexHeaderDefaults: config.CodexHeaderDefaults{
+		CodexHeaderDefaults: config.CodexHeaderDefaultsConfig{
 			UserAgent:    "config-ua",
 			BetaFeatures: "config-beta",
 		},
@@ -139,7 +139,7 @@ func TestApplyCodexWebsocketHeadersPrefersExistingHeadersOverClientAndConfig(t *
 
 func TestApplyCodexWebsocketHeadersConfigUserAgentOverridesClientHeader(t *testing.T) {
 	cfg := &config.Config{
-		CodexHeaderDefaults: config.CodexHeaderDefaults{
+		CodexHeaderDefaults: config.CodexHeaderDefaultsConfig{
 			UserAgent:    "config-ua",
 			BetaFeatures: "config-beta",
 		},
@@ -165,7 +165,7 @@ func TestApplyCodexWebsocketHeadersConfigUserAgentOverridesClientHeader(t *testi
 
 func TestApplyCodexWebsocketHeadersIgnoresConfigForAPIKeyAuth(t *testing.T) {
 	cfg := &config.Config{
-		CodexHeaderDefaults: config.CodexHeaderDefaults{
+		CodexHeaderDefaults: config.CodexHeaderDefaultsConfig{
 			UserAgent:    "config-ua",
 			BetaFeatures: "config-beta",
 		},
@@ -191,7 +191,7 @@ func TestApplyCodexHeadersUsesConfigUserAgentForOAuth(t *testing.T) {
 		t.Fatalf("NewRequest() error = %v", err)
 	}
 	cfg := &config.Config{
-		CodexHeaderDefaults: config.CodexHeaderDefaults{
+		CodexHeaderDefaults: config.CodexHeaderDefaultsConfig{
 			UserAgent:    "config-ua",
 			BetaFeatures: "config-beta",
 		},

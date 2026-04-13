@@ -99,17 +99,25 @@ func (e *OpenAICompatExecutor) Execute(ctx context.Context, auth *cliproxyauth.A
 		originalPayloadSource = opts.OriginalRequest
 	}
 	originalPayload := originalPayloadSource
-	originalTranslated := sdktranslator.TranslateRequest(from, to, baseModel, originalPayload, opts.Stream)
-	translated := sdktranslator.TranslateRequest(from, to, baseModel, req.Payload, opts.Stream)
-	requestedModel := helps.PayloadRequestedModel(opts, req.Model)
-	translated = helps.ApplyPayloadConfigWithRoot(e.cfg, baseModel, to.String(), "", translated, originalTranslated, requestedModel)
 
-	// Web search interception: intercept web_search tool calls and execute via SearXNG
-	websearchResult, websearchErr := websearch.InterceptRequest(ctx, e.cfg, translated, to.String(), baseModel)
-	if websearchErr != nil {
-		helps.LogWithRequestID(ctx).WithError(websearchErr).Warn("websearch: interception failed, passing request through")
-	} else if websearchResult != nil {
-		translated = websearchResult.ModifiedBody
+	var translated []byte
+	if !e.cfg.PreProcessDashboard.IsEnableTranslator() {
+		translated = req.Payload
+	} else {
+		originalTranslated := sdktranslator.TranslateRequest(from, to, baseModel, originalPayload, opts.Stream)
+		translated = sdktranslator.TranslateRequest(from, to, baseModel, req.Payload, opts.Stream)
+		requestedModel := helps.PayloadRequestedModel(opts, req.Model)
+		translated = helps.ApplyPayloadConfigWithRoot(e.cfg, baseModel, to.String(), "", translated, originalTranslated, requestedModel)
+	}
+
+	if e.cfg.PreProcessDashboard.IsEnableAuxLogic() {
+		// Web search interception: intercept web_search tool calls and execute via SearXNG
+		websearchResult, websearchErr := websearch.InterceptRequest(ctx, e.cfg, translated, to.String(), baseModel)
+		if websearchErr != nil {
+			helps.LogWithRequestID(ctx).WithError(websearchErr).Warn("websearch: interception failed, passing request through")
+		} else if websearchResult != nil {
+			translated = websearchResult.ModifiedBody
+		}
 	}
 	if opts.Alt == "responses/compact" {
 		if updated, errDelete := sjson.DeleteBytes(translated, "stream"); errDelete == nil {
@@ -117,9 +125,11 @@ func (e *OpenAICompatExecutor) Execute(ctx context.Context, auth *cliproxyauth.A
 		}
 	}
 
-	translated, err = thinking.ApplyThinking(translated, req.Model, from.String(), to.String(), e.Identifier())
-	if err != nil {
-		return resp, err
+	if e.cfg.PreProcessDashboard.IsEnableAuxLogic() {
+		translated, err = thinking.ApplyThinking(translated, req.Model, from.String(), to.String(), e.Identifier())
+		if err != nil {
+			return resp, err
+		}
 	}
 
 	url := strings.TrimSuffix(baseURL, "/") + endpoint
@@ -210,11 +220,18 @@ func (e *OpenAICompatExecutor) ExecuteStream(ctx context.Context, auth *cliproxy
 		originalPayloadSource = opts.OriginalRequest
 	}
 	originalPayload := originalPayloadSource
-	originalTranslated := sdktranslator.TranslateRequest(from, to, baseModel, originalPayload, true)
-	translated := sdktranslator.TranslateRequest(from, to, baseModel, req.Payload, true)
-	requestedModel := helps.PayloadRequestedModel(opts, req.Model)
-	translated = helps.ApplyPayloadConfigWithRoot(e.cfg, baseModel, to.String(), "", translated, originalTranslated, requestedModel)
 
+	var translated []byte
+	if !e.cfg.PreProcessDashboard.IsEnableTranslator() {
+		translated = req.Payload
+	} else {
+		originalTranslated := sdktranslator.TranslateRequest(from, to, baseModel, originalPayload, true)
+		translated = sdktranslator.TranslateRequest(from, to, baseModel, req.Payload, true)
+		requestedModel := helps.PayloadRequestedModel(opts, req.Model)
+		translated = helps.ApplyPayloadConfigWithRoot(e.cfg, baseModel, to.String(), "", translated, originalTranslated, requestedModel)
+	}
+
+	if e.cfg.PreProcessDashboard.IsEnableAuxLogic() {
 		// Web search interception: intercept web_search tool calls and execute via SearXNG
 		websearchResult, websearchErr := websearch.InterceptRequest(ctx, e.cfg, translated, to.String(), baseModel)
 		if websearchErr != nil {
@@ -223,9 +240,10 @@ func (e *OpenAICompatExecutor) ExecuteStream(ctx context.Context, auth *cliproxy
 			translated = websearchResult.ModifiedBody
 		}
 
-	translated, err = thinking.ApplyThinking(translated, req.Model, from.String(), to.String(), e.Identifier())
-	if err != nil {
-		return nil, err
+		translated, err = thinking.ApplyThinking(translated, req.Model, from.String(), to.String(), e.Identifier())
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	// Request usage data in the final streaming chunk so that token statistics
