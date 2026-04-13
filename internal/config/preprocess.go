@@ -19,9 +19,9 @@ func (c *PreProcessDashboardConfig) LoadEnvOverrides() {
 		c.ForceRawPrompt = &val
 	}
 
-	// Default ForceRawPrompt to true if not set
+	// Default ForceRawPrompt to false if not set
 	if c.ForceRawPrompt == nil {
-		defaultVal := true
+		defaultVal := false
 		c.ForceRawPrompt = &defaultVal
 	}
 
@@ -50,21 +50,21 @@ func (c *PreProcessDashboardConfig) Ensure() {
 // Getters
 func (c *PreProcessDashboardConfig) IsForceRawPrompt() bool {
 	if c.ForceRawPrompt == nil {
-		return true
+		return false
 	}
 	return *c.ForceRawPrompt
 }
 
 func (c *PreProcessDashboardConfig) IsEnableAuxLogic() bool {
 	if c.EnableAuxLogic == nil {
-		return false
+		return true
 	}
 	return *c.EnableAuxLogic
 }
 
 func (c *PreProcessDashboardConfig) IsEnableTranslator() bool {
 	if c.EnableTranslator == nil {
-		return false
+		return true
 	}
 	return *c.EnableTranslator
 }
