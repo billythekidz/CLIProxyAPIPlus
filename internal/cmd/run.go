@@ -7,11 +7,13 @@ import (
 	"context"
 	"errors"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/api"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/trafficlog"
 	"github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy"
 	log "github.com/sirupsen/logrus"
 )
@@ -25,6 +27,15 @@ import (
 //   - configPath: The path to the configuration file
 //   - localPassword: Optional password accepted for local management requests
 func StartService(cfg *config.Config, configPath string, localPassword string) {
+	if cfg.AuthDir != "" {
+		dbPath := filepath.Join(filepath.Dir(cfg.AuthDir), "traffic_logs.db")
+		if err := trafficlog.InitGlobalLogger(dbPath); err != nil {
+			log.Warnf("Failed to initialize traffic logger DB: %v", err)
+		} else {
+			trafficlog.StartWriting()
+		}
+	}
+
 	builder := cliproxy.NewBuilder().
 		WithConfig(cfg).
 		WithConfigPath(configPath).
@@ -53,11 +64,25 @@ func StartService(cfg *config.Config, configPath string, localPassword string) {
 	if err != nil && !errors.Is(err, context.Canceled) {
 		log.Errorf("proxy service exited with error: %v", err)
 	}
+
+	if logger := trafficlog.GetGlobalLogger(); logger != nil {
+		logger.Drain()
+		logger.Close()
+	}
 }
 
 // StartServiceBackground starts the proxy service in a background goroutine
 // and returns a cancel function for shutdown and a done channel.
 func StartServiceBackground(cfg *config.Config, configPath string, localPassword string) (cancel func(), done <-chan struct{}) {
+	if cfg.AuthDir != "" {
+		dbPath := filepath.Join(filepath.Dir(cfg.AuthDir), "traffic_logs.db")
+		if err := trafficlog.InitGlobalLogger(dbPath); err != nil {
+			log.Warnf("Failed to initialize traffic logger DB: %v", err)
+		} else {
+			trafficlog.StartWriting()
+		}
+	}
+
 	builder := cliproxy.NewBuilder().
 		WithConfig(cfg).
 		WithConfigPath(configPath).
@@ -75,6 +100,12 @@ func StartServiceBackground(cfg *config.Config, configPath string, localPassword
 
 	go func() {
 		defer close(doneCh)
+		defer func() {
+			if logger := trafficlog.GetGlobalLogger(); logger != nil {
+				logger.Drain()
+				logger.Close()
+			}
+		}()
 		if err := service.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
 			log.Errorf("proxy service exited with error: %v", err)
 		}

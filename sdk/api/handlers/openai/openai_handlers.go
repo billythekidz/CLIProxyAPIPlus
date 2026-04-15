@@ -130,12 +130,15 @@ func (h *OpenAIAPIHandler) ChatCompletions(c *gin.Context) {
 	if isMattermost {
 		// Use the distinct user field to derive a consistent session for each user
 		var mattermostSessionID string
-		if originalUser != "" {
+		
+		if h.Cfg != nil && h.Cfg.MattermostThreadMode == "per user per thread" && originalUser != "" {
 			hash := sha256.Sum256([]byte(originalUser))
 			mattermostSessionID = hex.EncodeToString(hash[:])
 		} else {
-			// Fallback session if no user id present
-			mattermostSessionID = "7ecf014e3650cfdf6697eedcd8f5e9da8b63faece8bdf2168393e1b7db7efba3"
+			// Fallback session or "all user 1 thread"
+			// Use a genuinely recorded recent valid thread instead of a fake manually-injected one
+			// so Perplexity receives a matching frontend_session_id
+			mattermostSessionID = "f0965736-fbfa-4b18-a4a1-87339395e0de"
 		}
 
 		var updated []byte

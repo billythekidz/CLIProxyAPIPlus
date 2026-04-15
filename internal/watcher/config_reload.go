@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/trafficlog"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/util"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/watcher/diff"
 	"gopkg.in/yaml.v3"
@@ -64,9 +65,11 @@ func (w *Watcher) reloadConfigIfChanged() {
 	log.Infof("config file changed, reloading: %s", w.configPath)
 	if w.reloadConfig() {
 		finalHash := newHash
+		var yamlContent string
 		if updatedData, errRead := os.ReadFile(w.configPath); errRead == nil && len(updatedData) > 0 {
 			sumUpdated := sha256.Sum256(updatedData)
 			finalHash = hex.EncodeToString(sumUpdated[:])
+			yamlContent = string(updatedData)
 		} else if errRead != nil {
 			log.WithError(errRead).Debug("failed to compute updated config hash after reload")
 		}
@@ -74,6 +77,11 @@ func (w *Watcher) reloadConfigIfChanged() {
 		w.lastConfigHash = finalHash
 		w.clientsMutex.Unlock()
 		w.persistConfigAsync()
+		
+		// Update Traffic Logger
+		if tl := trafficlog.GetGlobalLogger(); tl != nil {
+			tl.UpdateConfig(finalHash[:16], yamlContent)
+		}
 	}
 }
 

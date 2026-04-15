@@ -12,6 +12,9 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/interfaces"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/logging"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/trafficlog"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/util"
+	"github.com/tidwall/gjson"
 )
 
 const requestBodyOverrideContextKey = "REQUEST_BODY_OVERRIDE"
@@ -28,6 +31,9 @@ type RequestInfo struct {
 	Timestamp time.Time           // Timestamp is when the request was received.
 }
 
+// trafficLogSSEMaxBytes caps the SSE payload accumulated for traffic logging to 512KB.
+const trafficLogSSEMaxBytes = 512 * 1024
+
 // ResponseWriterWrapper wraps the standard gin.ResponseWriter to intercept and log response data.
 // It is designed to handle both standard and streaming responses, ensuring that logging operations do not block the client response.
 type ResponseWriterWrapper struct {
@@ -43,6 +49,9 @@ type ResponseWriterWrapper struct {
 	headers             map[string][]string        // headers stores the response headers.
 	logOnErrorOnly      bool                       // logOnErrorOnly enables logging only when an error response is detected.
 	firstChunkTimestamp time.Time                  // firstChunkTimestamp captures TTFB for streaming responses.
+	// Traffic log fields — populated during request lifecycle for SQLite recorder.
+	trafficStartTime time.Time   // trafficStartTime is set at construction time to compute DurationMs.
+	trafficSSEBuf    bytes.Buffer // trafficSSEBuf accumulates SSE chunks for traffic logging (capped at 512KB).
 }
 
 // NewResponseWriterWrapper creates and initializes a new ResponseWriterWrapper.
@@ -57,11 +66,12 @@ type ResponseWriterWrapper struct {
 //   - A pointer to a new ResponseWriterWrapper.
 func NewResponseWriterWrapper(w gin.ResponseWriter, logger logging.RequestLogger, requestInfo *RequestInfo) *ResponseWriterWrapper {
 	return &ResponseWriterWrapper{
-		ResponseWriter: w,
-		body:           &bytes.Buffer{},
-		logger:         logger,
-		requestInfo:    requestInfo,
-		headers:        make(map[string][]string),
+		ResponseWriter:   w,
+		body:             &bytes.Buffer{},
+		logger:           logger,
+		requestInfo:      requestInfo,
+		headers:          make(map[string][]string),
+		trafficStartTime: time.Now(),
 	}
 }
 
@@ -249,6 +259,10 @@ func (w *ResponseWriterWrapper) processStreamingChunks(done chan struct{}) {
 
 	for chunk := range w.chunkChannel {
 		w.streamWriter.WriteChunkAsync(chunk)
+		// Accumulate SSE bytes for traffic logging (capped to avoid OOM)
+		if w.trafficSSEBuf.Len() < trafficLogSSEMaxBytes {
+			w.trafficSSEBuf.Write(chunk)
+		}
 	}
 }
 
@@ -318,7 +332,115 @@ func (w *ResponseWriterWrapper) Finalize(c *gin.Context) error {
 		return nil
 	}
 
-	return w.logRequest(w.extractRequestBody(c), finalStatusCode, w.cloneHeaders(), w.extractResponseBody(c), w.extractWebsocketTimeline(c), w.extractAPIRequest(c), w.extractAPIResponse(c), w.extractAPIWebsocketTimeline(c), w.extractAPIResponseTimestamp(c), slicesAPIResponseError, forceLog)
+	logErr := w.logRequest(w.extractRequestBody(c), finalStatusCode, w.cloneHeaders(), w.extractResponseBody(c), w.extractWebsocketTimeline(c), w.extractAPIRequest(c), w.extractAPIResponse(c), w.extractAPIWebsocketTimeline(c), w.extractAPIResponseTimestamp(c), slicesAPIResponseError, forceLog)
+
+	// Traffic log hook: record to SQLite after standard logging.
+	w.recordTrafficLog(c, finalStatusCode)
+
+	return logErr
+}
+
+// recordTrafficLog emits a TrafficRecord to the global TrafficLogger (if enabled).
+// It is called at the end of Finalize() and has access to all captured request/response data.
+func (w *ResponseWriterWrapper) recordTrafficLog(c *gin.Context, statusCode int) {
+	tl := trafficlog.GetGlobalLogger()
+	if tl == nil {
+		return
+	}
+
+	if w.requestInfo == nil {
+		return
+	}
+
+	// Use proc_request (API_REQUEST = transformed body sent to upstream) if available.
+	procReq := string(w.extractAPIRequest(c))
+
+	// Raw request is the original client body.
+	const maxRawBytes = 1 * 1024 * 1024 // 1MB cap
+	rawReq := ""
+	if rb := w.extractRequestBody(c); len(rb) > 0 {
+		if len(rb) > maxRawBytes {
+			rb = rb[:maxRawBytes]
+		}
+		rawReq = string(rb)
+	}
+
+	// Response body: use API_RESPONSE if set, otherwise captured buffer.
+	const maxRespBytes = 2 * 1024 * 1024 // 2MB cap
+	responseStr := ""
+	if apiResp := w.extractAPIResponse(c); len(apiResp) > 0 {
+		if len(apiResp) > maxRespBytes {
+			apiResp = apiResp[:maxRespBytes]
+		}
+		responseStr = string(apiResp)
+	} else if rb := w.extractResponseBody(c); len(rb) > 0 {
+		if len(rb) > maxRespBytes {
+			rb = rb[:maxRespBytes]
+		}
+		responseStr = string(rb)
+	}
+
+	// SSE payload accumulated during streaming.
+	ssePayload := w.trafficSSEBuf.String()
+
+	// Error info from API_RESPONSE_ERROR context key.
+	errorInfo := ""
+	if apiErr, ok := c.Get("API_RESPONSE_ERROR"); ok {
+		if msgs, ok := apiErr.([]*interfaces.ErrorMessage); ok && len(msgs) > 0 {
+			var sb strings.Builder
+			for i, m := range msgs {
+				if i > 0 {
+					sb.WriteString("; ")
+				}
+				if m.Error != nil {
+					sb.WriteString(m.Error.Error())
+				}
+			}
+			errorInfo = sb.String()
+		}
+	}
+
+	// Provider / model from Gin context (set by handlers).
+	provider := c.GetString("provider")
+	model := c.GetString("model")
+	if model == "" {
+		model = c.GetString("requested_model")
+	}
+
+	// Try to extract from raw processing request if missing
+	if model == "" {
+		if len(procReq) > 0 {
+			model = gjson.Get(procReq, "model").String()
+		} else if len(rawReq) > 0 {
+			model = gjson.Get(rawReq, "model").String()
+		}
+	}
+
+	if provider == "" && model != "" {
+		providers := util.GetProviderName(model)
+		if len(providers) > 0 {
+			provider = providers[0]
+		}
+	}
+
+	record := trafficlog.TrafficRecord{
+		RequestID:   w.requestInfo.RequestID,
+		Provider:    provider,
+		Endpoint:    w.requestInfo.URL,
+		Model:       model,
+		Method:      w.requestInfo.Method,
+		StatusCode:  statusCode,
+		DurationMs:  time.Since(w.trafficStartTime).Milliseconds(),
+		IsStreaming: w.isStreaming,
+		ConfigHash:  tl.CurrentConfigHash(),
+		RawRequest:  rawReq,
+		ProcRequest: procReq,
+		Response:    responseStr,
+		SSEPayload:  ssePayload,
+		ErrorInfo:   errorInfo,
+	}
+
+	tl.Record(record)
 }
 
 func (w *ResponseWriterWrapper) cloneHeaders() map[string][]string {

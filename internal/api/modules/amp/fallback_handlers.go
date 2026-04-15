@@ -248,6 +248,14 @@ func (fh *FallbackHandler) WrapHandler(handler gin.HandlerFunc) gin.HandlerFunc 
 			providerName = providers[0]
 		}
 
+		// Set provider and model in context for traffic logging middleware
+		c.Set("provider", providerName)
+		c.Set("model", modelName)
+		if usedMapping {
+			c.Set("requested_model", modelName)
+			c.Set("model", resolvedModel)
+		}
+
 		if usedMapping {
 			// Log: Model was mapped to another model
 			log.Debugf("amp model mapping: request %s -> %s", normalizedModel, resolvedModel)

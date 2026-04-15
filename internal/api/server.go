@@ -230,6 +230,8 @@ func NewServer(cfg *config.Config, authManager *auth.Manager, accessManager *sdk
 		}
 	}
 
+
+
 	engine.Use(corsMiddleware())
 	wd, err := os.Getwd()
 	if err != nil {
@@ -593,6 +595,13 @@ func (s *Server) registerManagementRoutes() {
 		mgmt.GET("/request-log", s.mgmt.GetRequestLog)
 		mgmt.PUT("/request-log", s.mgmt.PutRequestLog)
 		mgmt.PATCH("/request-log", s.mgmt.PutRequestLog)
+
+		mgmt.GET("/traffic-logs", s.mgmt.GetTrafficLogs)
+		mgmt.DELETE("/traffic-logs", s.mgmt.DeleteTrafficLogs)
+		mgmt.GET("/traffic-logs/stats", s.mgmt.GetTrafficLogStats)
+		mgmt.GET("/traffic-logs/detail/:id", s.mgmt.GetTrafficLogDetail)
+		mgmt.GET("/traffic-logs/config-snapshot/:hash", s.mgmt.GetTrafficLogConfigSnapshot)
+
 		mgmt.GET("/ws-auth", s.mgmt.GetWebsocketAuth)
 		mgmt.PUT("/ws-auth", s.mgmt.PutWebsocketAuth)
 		mgmt.PATCH("/ws-auth", s.mgmt.PutWebsocketAuth)

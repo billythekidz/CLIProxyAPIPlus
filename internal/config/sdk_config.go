@@ -34,6 +34,13 @@ type SDKConfig struct {
 	// NonStreamKeepAliveInterval controls how often blank lines are emitted for non-streaming responses.
 	// <= 0 disables keep-alives. Value is in seconds.
 	NonStreamKeepAliveInterval int `yaml:"nonstream-keepalive-interval,omitempty" json:"nonstream-keepalive-interval,omitempty"`
+
+	// MattermostThreadMode describes how Mattermost requests are mapped to Perplexity threads.
+	// "all user 1 thread" or "per user per thread"
+	MattermostThreadMode string `yaml:"mattermost-thread-mode" json:"mattermost-thread-mode"`
+
+	// LlmGateToolQuality enables LLM Gate Tool Quality for internal logic.
+	LlmGateToolQuality bool `yaml:"llm-gate-tool-quality" json:"llm-gate-tool-quality"`
 }
 
 // StreamingConfig holds server streaming behavior configuration.

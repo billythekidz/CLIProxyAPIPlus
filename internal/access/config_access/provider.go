@@ -121,18 +121,23 @@ func normalizeKeys(keys []string) []string {
 	if len(keys) == 0 {
 		return nil
 	}
-	normalized := make([]string, 0, len(keys))
-	seen := make(map[string]struct{}, len(keys))
+	normalized := make([]string, 0, len(keys)*2)
+	seen := make(map[string]struct{}, len(keys)*2)
 	for _, key := range keys {
-		trimmedKey := strings.TrimSpace(key)
-		if trimmedKey == "" {
-			continue
+		// Split by literal \n strings or actual newlines, in case the dashboard saves a multiline text block as one element.
+		key = strings.ReplaceAll(key, `\n`, "\n")
+		parts := strings.Split(key, "\n")
+		for _, part := range parts {
+			trimmedKey := strings.TrimSpace(part)
+			if trimmedKey == "" {
+				continue
+			}
+			if _, exists := seen[trimmedKey]; exists {
+				continue
+			}
+			seen[trimmedKey] = struct{}{}
+			normalized = append(normalized, trimmedKey)
 		}
-		if _, exists := seen[trimmedKey]; exists {
-			continue
-		}
-		seen[trimmedKey] = struct{}{}
-		normalized = append(normalized, trimmedKey)
 	}
 	if len(normalized) == 0 {
 		return nil

@@ -137,6 +137,12 @@ type Config struct {
 	// and executes them via SearXNG instead of relying on provider-native search.
 	WebSearch WebSearchConfig `yaml:"web-search" json:"web-search"`
 
+	// PerplexityCompat configures the perplexity-openai-compat provider properties.
+	PerplexityCompat PerplexityCompatConfig `yaml:"perplexity,omitempty" json:"perplexity,omitempty"`
+
+	// TrafficLog configures the SQLite-based request/response logging system.
+	TrafficLog TrafficLogConfig `yaml:"traffic-log" json:"traffic-log"`
+
 	// OAuthExcludedModels defines per-provider global model exclusions applied to OAuth/file-backed auth entries.
 	// Supported channels: gemini-cli, vertex, aistudio, antigravity, claude, codex, qwen, iflow, kiro, github-copilot.
 	OAuthExcludedModels map[string][]string `yaml:"oauth-excluded-models,omitempty" json:"oauth-excluded-models,omitempty"`
@@ -284,6 +290,21 @@ type ContextMemoryModelScope struct {
 
 	// Exclude model wildcard patterns to disable regardless of include/default.
 	Exclude []string `yaml:"exclude" json:"exclude"`
+}
+
+// PerplexityCompatConfig contains settings corresponding to perplexity-openai-compat.
+type PerplexityCompatConfig struct {
+	// LlmGateToolQuality toggles LLM Gate usage in perplexity-openai-compat.
+	LlmGateToolQuality bool `yaml:"llm-gate-tool-quality" json:"llm-gate-tool-quality"`
+
+	// EnablePuzzleEncoding toggles Perplexity puzzle encoding.
+	EnablePuzzleEncoding bool `yaml:"enable-puzzle-encoding" json:"enable-puzzle-encoding"`
+}
+
+// TrafficLogConfig reflects the per-provider toggle configuration settings.
+type TrafficLogConfig struct {
+	Enabled   bool            `yaml:"enabled" json:"enabled"`
+	Providers map[string]bool `yaml:"providers" json:"providers"`
 }
 
 // OAuthModelAlias defines a model ID alias for a specific channel.
@@ -746,8 +767,10 @@ func LoadConfigOptional(configFile string, optional bool) (*Config, error) {
 	cfg.ContextMemory.ModelScope.Default = "exclude"
 	cfg.ContextMemory.ModelScope.Include = []string{"claude-opus-*", "claude-sonnet-*"}
 	cfg.ContextMemory.ModelScope.Exclude = []string{}
+	cfg.PerplexityCompat.LlmGateToolQuality = true
 	cfg.RemoteManagement.PanelGitHubRepository = DefaultPanelGitHubRepository
 	cfg.IncognitoBrowser = false // Default to normal browser (AWS uses incognito by force)
+	cfg.MattermostThreadMode = "all user 1 thread"
 	if err = yaml.Unmarshal(data, &cfg); err != nil {
 		if optional {
 			// In cloud deploy mode, if YAML parsing fails, return empty config instead of error.
@@ -1575,11 +1598,13 @@ func mergeNodePreserve(dst, src *yaml.Node, path ...[]string) {
 			dst.Content = dst.Content[:len(src.Content)]
 		}
 	case yaml.ScalarNode, yaml.AliasNode:
-		// For scalars, update Tag and Value but keep Style from dst to preserve quoting
+		// Update Kind, Tag, Value, and Style from src.
+		// Preserving dst.Style caused YAML formatting corruption (e.g. LiteralStyle
+		// bleeding into sequence elements, producing \n-embedded api-keys).
 		dst.Kind = src.Kind
 		dst.Tag = src.Tag
 		dst.Value = src.Value
-		// Keep dst.Style as-is intentionally
+		dst.Style = src.Style
 	case 0:
 		// Unknown/empty kind; do nothing
 	default:
@@ -2008,8 +2033,14 @@ func pruneMissingMapKeys(dstMap, srcMap *yaml.Node) {
 
 // normalizeCollectionNodeStyles forces YAML collections to use block notation, keeping
 // lists and maps readable. Empty sequences retain flow style ([]) so empty list markers
-// remain compact.
+// remain compact. Scalar nodes that are direct children of sequences have their style
+// reset to 0 (plain) to prevent LiteralStyle / QuotedStyle corruption from leaked dst
+// node styles during merging (e.g. api-keys written with embedded \n characters).
 func normalizeCollectionNodeStyles(node *yaml.Node) {
+	normalizeCollectionNodeStylesInner(node, false)
+}
+
+func normalizeCollectionNodeStylesInner(node *yaml.Node, insideSequence bool) {
 	if node == nil {
 		return
 	}
@@ -2017,7 +2048,7 @@ func normalizeCollectionNodeStyles(node *yaml.Node) {
 	case yaml.MappingNode:
 		node.Style = 0
 		for i := range node.Content {
-			normalizeCollectionNodeStyles(node.Content[i])
+			normalizeCollectionNodeStylesInner(node.Content[i], false)
 		}
 	case yaml.SequenceNode:
 		if len(node.Content) == 0 {
@@ -2026,10 +2057,14 @@ func normalizeCollectionNodeStyles(node *yaml.Node) {
 			node.Style = 0
 		}
 		for i := range node.Content {
-			normalizeCollectionNodeStyles(node.Content[i])
+			normalizeCollectionNodeStylesInner(node.Content[i], true)
 		}
-	default:
-		// Scalars keep their existing style to preserve quoting
+	case yaml.ScalarNode:
+		if insideSequence {
+			// Reset any inherited/corrupted style so values are written as plain scalars.
+			node.Style = 0
+		}
+		// Scalars inside mappings keep their existing style to preserve intentional quoting.
 	}
 }
 
