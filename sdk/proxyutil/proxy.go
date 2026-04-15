@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 
 	"golang.org/x/net/proxy"
@@ -30,6 +31,21 @@ type Setting struct {
 	Raw  string
 	Mode Mode
 	URL  *url.URL
+}
+
+var dockerResolver = &net.Resolver{
+	PreferGo: true,
+	Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
+		var d net.Dialer
+		return d.DialContext(ctx, network, "127.0.0.11:53")
+	},
+}
+
+type dockerDirectDialer struct{}
+
+func (d *dockerDirectDialer) Dial(network, addr string) (net.Conn, error) {
+	dialer := &net.Dialer{Resolver: dockerResolver}
+	return dialer.Dial(network, addr)
 }
 
 // Parse normalizes a proxy configuration value into inherit, direct, or proxy modes.
@@ -102,19 +118,55 @@ func BuildHTTPTransport(raw string) (*http.Transport, Mode, error) {
 				password, _ := setting.URL.User.Password()
 				proxyAuth = &proxy.Auth{User: username, Password: password}
 			}
-			dialer, errSOCKS5 := proxy.SOCKS5("tcp", setting.URL.Host, proxyAuth, proxy.Direct)
+			proxyHost := setting.URL.Host
+			if strings.HasPrefix(proxyHost, "warp:") || proxyHost == "warp" {
+				proxyHost = strings.Replace(proxyHost, "warp", "127.0.0.1", 1)
+			}
+			dialer, errSOCKS5 := proxy.SOCKS5("tcp", proxyHost, proxyAuth, &dockerDirectDialer{})
 			if errSOCKS5 != nil {
 				return nil, setting.Mode, fmt.Errorf("create SOCKS5 dialer failed: %w", errSOCKS5)
 			}
+			
+			perHost := proxy.NewPerHost(dialer, &dockerDirectDialer{})
+			perHost.AddFromString("localhost")
+			perHost.AddFromString("127.0.0.1")
+			
+			noProxyEnv := os.Getenv("NO_PROXY")
+			if noProxyEnv == "" {
+				noProxyEnv = os.Getenv("no_proxy")
+			}
+			for _, h := range strings.Split(noProxyEnv, ",") {
+				if t := strings.TrimSpace(h); t != "" {
+					perHost.AddFromString(t)
+				}
+			}
+
 			transport := cloneDefaultTransport()
 			transport.Proxy = nil
 			transport.DialContext = func(_ context.Context, network, addr string) (net.Conn, error) {
-				return dialer.Dial(network, addr)
+				return perHost.Dial(network, addr)
 			}
 			return transport, setting.Mode, nil
 		}
 		transport := cloneDefaultTransport()
-		transport.Proxy = http.ProxyURL(setting.URL)
+		transport.Proxy = func(req *http.Request) (*url.URL, error) {
+			noProxyEnv := os.Getenv("NO_PROXY")
+			if noProxyEnv == "" {
+				noProxyEnv = os.Getenv("no_proxy")
+			}
+			
+			hosts := append(strings.Split(noProxyEnv, ","), "localhost", "127.0.0.1")
+			reqHost, _, err := net.SplitHostPort(req.URL.Host)
+			if err != nil {
+				reqHost = req.URL.Host
+			}
+			for _, h := range hosts {
+				if t := strings.TrimSpace(h); t != "" && (reqHost == t || strings.HasSuffix(reqHost, "."+t)) {
+					return nil, nil // Return nil to bypass proxy
+				}
+			}
+			return setting.URL, nil
+		}
 		return transport, setting.Mode, nil
 	default:
 		return nil, setting.Mode, nil

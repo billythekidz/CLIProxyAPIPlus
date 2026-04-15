@@ -7,13 +7,17 @@
 package openai
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
+	"net/http/httputil"
+	"net/url"
 	"strings"
 	"sync"
 
@@ -154,6 +158,25 @@ func (h *OpenAIAPIHandler) ChatCompletions(c *gin.Context) {
 	stream := streamResult.Type == gjson.True
 
 	modelName := gjson.GetBytes(rawJSON, "model").String()
+
+	// [Dynamic Postfix Routing to Enhance Service]
+	if h.Cfg != nil && h.Cfg.Enhance.Enabled {
+		postfix := h.Cfg.Enhance.Postfix
+		if postfix == "" {
+			postfix = "-enhance"
+		}
+		if strings.HasSuffix(modelName, postfix) {
+			endpoint := h.Cfg.Enhance.Endpoint
+			if endpoint == "" {
+				endpoint = "http://vps_proxy_model_enhance:8318/v1/chat/completions"
+			}
+			newModel := strings.TrimSuffix(modelName, postfix)
+			rawJSON, _ = sjson.SetBytes(rawJSON, "model", newModel)
+			
+			h.forwardToEnhanceService(c, endpoint, rawJSON)
+			return
+		}
+	}
 	if overrideEndpoint, ok := resolveEndpointOverride(modelName, openAIChatEndpoint); ok && overrideEndpoint == openAIResponsesEndpoint {
 		originalChat := rawJSON
 		if shouldTreatAsResponsesFormat(rawJSON) {
@@ -938,4 +961,35 @@ func (h *OpenAIAPIHandler) handleStreamResult(c *gin.Context, flusher http.Flush
 			_, _ = fmt.Fprint(c.Writer, "data: [DONE]\n\n")
 		},
 	})
+}
+
+func (h *OpenAIAPIHandler) forwardToEnhanceService(c *gin.Context, endpoint string, rawJSON []byte) {
+	targetURL, err := url.Parse(endpoint)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, handlers.ErrorResponse{
+			Error: handlers.ErrorDetail{
+				Message: fmt.Sprintf("invalid enhance endpoint url: %v", err),
+				Type:    "server_error",
+			},
+		})
+		return
+	}
+
+	proxy := httputil.NewSingleHostReverseProxy(targetURL)
+
+	// Update the request body and length
+	c.Request.Body = io.NopCloser(bytes.NewReader(rawJSON))
+	c.Request.ContentLength = int64(len(rawJSON))
+	c.Request.Header.Set("Content-Length", fmt.Sprintf("%d", len(rawJSON)))
+
+	originalDirector := proxy.Director
+	proxy.Director = func(req *http.Request) {
+		originalDirector(req)
+		req.URL.Scheme = targetURL.Scheme
+		req.URL.Host = targetURL.Host
+		req.URL.Path = targetURL.Path
+		req.Host = targetURL.Host
+	}
+
+	proxy.ServeHTTP(c.Writer, c.Request)
 }

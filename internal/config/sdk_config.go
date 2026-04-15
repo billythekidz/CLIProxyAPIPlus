@@ -41,6 +41,9 @@ type SDKConfig struct {
 
 	// LlmGateToolQuality enables LLM Gate Tool Quality for internal logic.
 	LlmGateToolQuality bool `yaml:"llm-gate-tool-quality" json:"llm-gate-tool-quality"`
+
+	// Enhance service configuration
+	Enhance EnhanceConfig `yaml:"enhance" json:"enhance"`
 }
 
 // StreamingConfig holds server streaming behavior configuration.
@@ -53,4 +56,16 @@ type StreamingConfig struct {
 	// to allow auth rotation / transient recovery.
 	// <= 0 disables bootstrap retries. Default is 0.
 	BootstrapRetries int `yaml:"bootstrap-retries,omitempty" json:"bootstrap-retries,omitempty"`
+}
+
+// EnhanceConfig configures dynamic model postfix routing to the external enhance service.
+type EnhanceConfig struct {
+	// Enabled toggles the dynamic postfix routing feature.
+	Enabled bool `yaml:"enabled" json:"enabled"`
+	
+	// Postfix is the suffix applied to requested model names (e.g., "-enhance"). Default: "-enhance"
+	Postfix string `yaml:"postfix" json:"postfix"`
+	
+	// Endpoint is the full URL of the enhance service endpoint (e.g., "http://vps_proxy_model_enhance:8318/v1/chat/completions").
+	Endpoint string `yaml:"endpoint" json:"endpoint"`
 }
