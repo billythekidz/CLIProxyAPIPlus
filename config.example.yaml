@@ -119,6 +119,14 @@ nonstream-keepalive-interval: 0
 #   keepalive-seconds: 15   # Default: 0 (disabled). <= 0 disables keep-alives.
 #   bootstrap-retries: 1    # Default: 0 (disabled). Retries before first byte is sent.
 
+# Enhance Framework (BYOK Copilot)
+# Apply model enhancements, routing them through the Copilot SDK engine (proxy-model-enhance) to leverage infinite context compaction for all models and endpoints.
+# enhance:
+#   enabled: false
+#   postfix: '-enhance'
+#   endpoint: 'http://localhost:8318/v1/chat/completions'
+
+
 # Signature cache validation for thinking blocks (Antigravity/Claude).
 # When true (default), cached signatures are preferred and validated.
 # When false, client signatures are used directly after normalization (bypass mode for testing).

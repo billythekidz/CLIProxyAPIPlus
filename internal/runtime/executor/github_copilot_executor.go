@@ -28,10 +28,11 @@ import (
 )
 
 const (
-	githubCopilotBaseURL       = "https://api.githubcopilot.com"
-	githubCopilotChatPath      = "/chat/completions"
-	githubCopilotResponsesPath = "/responses"
-	githubCopilotAuthType      = "github-copilot"
+	githubCopilotBaseURL        = "https://api.githubcopilot.com"
+	githubCopilotChatPath       = "/chat/completions"
+	githubCopilotResponsesPath  = "/responses"
+	githubCopilotEmbeddingsPath = "/embeddings"
+	githubCopilotAuthType       = "github-copilot"
 	githubCopilotTokenCacheTTL = 25 * time.Minute
 	// tokenExpiryBuffer is the time before expiry when we should refresh the token.
 	tokenExpiryBuffer = 5 * time.Minute
@@ -114,6 +115,10 @@ func (e *GitHubCopilotExecutor) Execute(ctx context.Context, auth *cliproxyauth.
 
 	reporter := newUsageReporter(ctx, e.Identifier(), req.Model, auth)
 	defer reporter.trackFailure(ctx, &err)
+
+	if opts.Alt == "embeddings" {
+		return e.executeEmbeddings(ctx, auth, req, baseURL, apiToken)
+	}
 
 	from := opts.SourceFormat
 	useResponses := useGitHubCopilotResponsesEndpoint(from, req.Model)
@@ -245,6 +250,63 @@ func (e *GitHubCopilotExecutor) Execute(ctx context.Context, auth *cliproxyauth.
 	reporter.ensurePublished(ctx)
 	return resp, nil
 }
+
+// executeEmbeddings handles /v1/embeddings requests for GitHub Copilot.
+func (e *GitHubCopilotExecutor) executeEmbeddings(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, baseURL, apiToken string) (resp cliproxyexecutor.Response, err error) {
+	url := strings.TrimRight(baseURL, "/") + githubCopilotEmbeddingsPath
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(req.Payload))
+	if err != nil {
+		return resp, err
+	}
+	e.applyHeaders(httpReq, apiToken, req.Payload)
+
+	var authID, authLabel, authType, authValue string
+	if auth != nil {
+		authID = auth.ID
+		authLabel = auth.Label
+		authType, authValue = auth.AccountInfo()
+	}
+	recordAPIRequest(ctx, e.cfg, upstreamRequestLog{
+		URL:       url,
+		Method:    http.MethodPost,
+		Headers:   httpReq.Header.Clone(),
+		Body:      req.Payload,
+		Provider:  e.Identifier(),
+		AuthID:    authID,
+		AuthLabel: authLabel,
+		AuthType:  authType,
+		AuthValue: authValue,
+	})
+
+	httpClient := newProxyAwareHTTPClient(ctx, e.cfg, auth, 0)
+	httpResp, err := httpClient.Do(httpReq)
+	if err != nil {
+		recordAPIResponseError(ctx, e.cfg, err)
+		return resp, err
+	}
+	defer func() {
+		if errClose := httpResp.Body.Close(); errClose != nil {
+			log.Errorf("github-copilot executor: close embeddings response body error: %v", errClose)
+		}
+	}()
+	recordAPIResponseMetadata(ctx, e.cfg, httpResp.StatusCode, httpResp.Header.Clone())
+	if httpResp.StatusCode < 200 || httpResp.StatusCode >= 300 {
+		b, _ := io.ReadAll(httpResp.Body)
+		appendAPIResponseChunk(ctx, e.cfg, b)
+		err = statusErr{code: httpResp.StatusCode, msg: string(b)}
+		return resp, err
+	}
+	body, err := io.ReadAll(httpResp.Body)
+	if err != nil {
+		recordAPIResponseError(ctx, e.cfg, err)
+		return resp, err
+	}
+	appendAPIResponseChunk(ctx, e.cfg, body)
+	resp.Payload = body
+	resp.Headers = httpResp.Header.Clone()
+	return resp, nil
+}
+
 
 // ExecuteStream handles streaming requests to GitHub Copilot.
 func (e *GitHubCopilotExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (_ *cliproxyexecutor.StreamResult, err error) {

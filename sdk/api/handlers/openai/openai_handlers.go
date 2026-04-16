@@ -165,7 +165,7 @@ func (h *OpenAIAPIHandler) ChatCompletions(c *gin.Context) {
 		if postfix == "" {
 			postfix = "-enhance"
 		}
-		if strings.HasSuffix(modelName, postfix) {
+		if h.Cfg.Enhance.RouteAll || strings.HasSuffix(modelName, postfix) {
 			endpoint := h.Cfg.Enhance.Endpoint
 			if endpoint == "" {
 				endpoint = "http://vps_proxy_model_enhance:8318/v1/chat/completions"

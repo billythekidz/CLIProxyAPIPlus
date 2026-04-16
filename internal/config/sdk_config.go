@@ -63,6 +63,9 @@ type EnhanceConfig struct {
 	// Enabled toggles the dynamic postfix routing feature.
 	Enabled bool `yaml:"enabled" json:"enabled"`
 	
+	// RouteAll when true, applies enhance routing unconditionally to all models and endpoints.
+	RouteAll bool `yaml:"route-all" json:"route-all"`
+	
 	// Postfix is the suffix applied to requested model names (e.g., "-enhance"). Default: "-enhance"
 	Postfix string `yaml:"postfix" json:"postfix"`
 	
