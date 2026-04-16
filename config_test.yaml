@@ -1,0 +1,6 @@
+api-keys:
+  - "test-key"
+enhance:
+  enabled: true
+  postfix: "-enhance"
+  endpoint: "http://127.0.0.1:8318/v1/chat/completions"

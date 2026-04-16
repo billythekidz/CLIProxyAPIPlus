@@ -98,6 +98,25 @@ func NewDirectTransport() *http.Transport {
 	return clone
 }
 
+// isInternalHost attempts to automatically detect internal IP addresses and
+// docker compose service names (which lack top-level domains).
+func isInternalHost(host string) bool {
+	if host == "localhost" {
+		return true
+	}
+	// Check if it's a bare hostname (no dots), typical for Docker services or local names
+	if !strings.Contains(host, ".") && host != "" {
+		return true
+	}
+	// Check if it's a loopback or private IP
+	if ip := net.ParseIP(host); ip != nil {
+		if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() {
+			return true
+		}
+	}
+	return false
+}
+
 // BuildHTTPTransport constructs an HTTP transport for the provided proxy setting.
 func BuildHTTPTransport(raw string) (*http.Transport, Mode, error) {
 	setting, errParse := Parse(raw)
@@ -144,6 +163,14 @@ func BuildHTTPTransport(raw string) (*http.Transport, Mode, error) {
 			transport := cloneDefaultTransport()
 			transport.Proxy = nil
 			transport.DialContext = func(_ context.Context, network, addr string) (net.Conn, error) {
+				host, _, err := net.SplitHostPort(addr)
+				if err != nil {
+					host = addr
+				}
+				if isInternalHost(host) {
+					var dd dockerDirectDialer
+					return dd.Dial(network, addr)
+				}
 				return perHost.Dial(network, addr)
 			}
 			return transport, setting.Mode, nil
@@ -159,6 +186,9 @@ func BuildHTTPTransport(raw string) (*http.Transport, Mode, error) {
 			reqHost, _, err := net.SplitHostPort(req.URL.Host)
 			if err != nil {
 				reqHost = req.URL.Host
+			}
+			if isInternalHost(reqHost) {
+				return nil, nil // Return nil to bypass proxy
 			}
 			for _, h := range hosts {
 				if t := strings.TrimSpace(h); t != "" && (reqHost == t || strings.HasSuffix(reqHost, "."+t)) {

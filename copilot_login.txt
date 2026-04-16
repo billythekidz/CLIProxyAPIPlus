@@ -1,0 +1,11 @@
+CLIProxyAPI Version: dev, Commit: none, BuiltAt: unknown
+[2026-04-15 21:53:29] [--------] [info ] [main.go:476] CLIProxyAPI Version: dev, Commit: none, BuiltAt: unknown
+Starting GitHub Copilot authentication...
+
+To authenticate, please visit: https://github.com/login/device
+And enter the code: 1DDF-E935
+
+Waiting for GitHub authorization...
+(This will timeout in 899 seconds if not authorized)
+Verifying Copilot access...
+[2026-04-15 21:54:11] [--------] [error] [github_copilot_login.go:33] GitHub Copilot authentication failed: github-copilot: failed to verify Copilot access - you may not have an active Copilot subscription: token_exchange_failed: Failed to exchange device code for access token (caused by: status 403: {"can_signup_for_limited":true,"error_details":{"url":"https://github.com/github-copilot/signup?editor={EDITOR}","message":"No access to GitHub Copilot found. You are currently logged in as Erhan9425.","title":"Sign up for GitHub Copilot","notification_id":"no_copilot_access"},"message":"Resource not accessible by integration. For more on scraping GitHub and how it may affect your rights, please review our Terms of Service (https://docs.github.com/en/site-policy/github-terms/github-terms-of-service)"})

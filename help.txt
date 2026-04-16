@@ -1,0 +1,69 @@
+Usage of server.exe
+  -antigravity-login
+    Login to Antigravity using OAuth
+  -claude-login
+    Login to Claude using OAuth
+  -codebuddy-login
+    Login to CodeBuddy using browser OAuth flow
+  -codex-device-login
+    Login to Codex using device code flow
+  -codex-login
+    Login to Codex using OAuth
+  -config string
+    Configure File Path
+  -cursor-login
+    Login to Cursor using OAuth
+  -github-copilot-login
+    Login to GitHub Copilot using device flow
+  -gitlab-login
+    Login to GitLab Duo using OAuth
+  -gitlab-token-login
+    Login to GitLab Duo using a personal access token
+  -iflow-cookie
+    Login to iFlow using Cookie
+  -iflow-login
+    Login to iFlow using OAuth
+  -incognito
+    Open browser in incognito/private mode for OAuth (useful for multiple accounts)
+  -kilo-login
+    Login to Kilo AI using device flow
+  -kimi-login
+    Login to Kimi using OAuth
+  -kiro-aws-authcode
+    Login to Kiro using AWS Builder ID (authorization code flow, better UX)
+  -kiro-aws-login
+    Login to Kiro using AWS Builder ID (device code flow)
+  -kiro-google-login
+    Login to Kiro using Google OAuth (same as --kiro-login)
+  -kiro-idc-flow string
+    IDC flow type: authcode (default) or device
+  -kiro-idc-login
+    Login to Kiro using IAM Identity Center (IDC)
+  -kiro-idc-region string
+    IDC region (default: us-east-1)
+  -kiro-idc-start-url string
+    IDC start URL (required with --kiro-idc-login)
+  -kiro-import
+    Import Kiro token from Kiro IDE (~/.aws/sso/cache/kiro-auth-token.json)
+  -kiro-login
+    Login to Kiro using Google OAuth
+  -local-model
+    Use embedded model catalog only, skip remote model fetching
+  -login
+    Login Google Account
+  -no-browser
+    Don't open browser automatically for OAuth
+  -no-incognito
+    Force disable incognito mode (uses existing browser session)
+  -oauth-callback-port int
+    Override OAuth callback port (defaults to provider-specific port)
+  -project_id string
+    Project ID (Gemini only, not required)
+  -qwen-login
+    Login to Qwen using OAuth
+  -standalone
+    In TUI mode, start an embedded local server
+  -tui
+    Start with terminal management UI
+  -vertex-import string
+    Import Vertex service account key JSON file
