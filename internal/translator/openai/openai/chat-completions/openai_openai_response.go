@@ -1,24 +1,25 @@
 // Package chat_completions provides passthrough response translation for OpenAI Chat Completions.
-// It normalizes OpenAI-compatible SSE lines by stripping the "data:" prefix and dropping "[DONE]".
+// It normalizes OpenAI-compatible SSE lines by stripping the "data:" prefix, dropping "[DONE]",
+// and removing known special tokens from response content.
 package chat_completions
 
 import (
 	"bytes"
 	"context"
+	"regexp"
 )
 
+// specialTokenRe matches common LLM special tokens that may leak into output.
+// Covers: ChatML tokens (Qwen), EOS/endoftext markers, and legacy control tokens.
+var specialTokenRe = regexp.MustCompile(`(?:<\|im_end\|>|<\|im_start\|>(?:system|user|assistant)?|<\|endoftext\|>|<\|endofprompt\|>|</s>)`)
+
+// stripSpecialTokens removes known special tokens from raw bytes.
+func stripSpecialTokens(data []byte) []byte {
+	return specialTokenRe.ReplaceAll(data, nil)
+}
+
 // ConvertOpenAIResponseToOpenAI normalizes a single chunk of an OpenAI-compatible streaming response.
-// If the chunk is an SSE "data:" line, the prefix is stripped and the remaining JSON payload is returned.
-// The "[DONE]" marker yields no output.
-//
-// Parameters:
-//   - ctx: The context for the request, used for cancellation and timeout handling
-//   - modelName: The name of the model being used for the response (unused in current implementation)
-//   - rawJSON: The raw JSON response from the Gemini CLI API
-//   - param: A pointer to a parameter object for maintaining state between calls
-//
-// Returns:
-//   - [][]byte: A slice of JSON payload chunks in OpenAI format.
+// Strips SSE "data:" prefix, drops "[DONE]", and removes special tokens from content.
 func ConvertOpenAIResponseToOpenAI(_ context.Context, _ string, originalRequestRawJSON, requestRawJSON, rawJSON []byte, param *any) [][]byte {
 	if bytes.HasPrefix(rawJSON, []byte("data:")) {
 		rawJSON = bytes.TrimSpace(rawJSON[5:])
@@ -26,19 +27,11 @@ func ConvertOpenAIResponseToOpenAI(_ context.Context, _ string, originalRequestR
 	if bytes.Equal(rawJSON, []byte("[DONE]")) {
 		return [][]byte{}
 	}
-	return [][]byte{rawJSON}
+	return [][]byte{stripSpecialTokens(rawJSON)}
 }
 
-// ConvertOpenAIResponseToOpenAINonStream passes through a non-streaming OpenAI response.
-//
-// Parameters:
-//   - ctx: The context for the request, used for cancellation and timeout handling
-//   - modelName: The name of the model being used for the response
-//   - rawJSON: The raw JSON response from the Gemini CLI API
-//   - param: A pointer to a parameter object for the conversion
-//
-// Returns:
-//   - []byte: The OpenAI-compatible JSON response.
+// ConvertOpenAIResponseToOpenAINonStream passes through a non-streaming OpenAI response
+// with special tokens stripped from the content.
 func ConvertOpenAIResponseToOpenAINonStream(ctx context.Context, modelName string, originalRequestRawJSON, requestRawJSON, rawJSON []byte, param *any) []byte {
-	return rawJSON
+	return stripSpecialTokens(rawJSON)
 }
