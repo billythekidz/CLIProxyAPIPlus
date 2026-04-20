@@ -35,15 +35,10 @@ func IsWebSearchToolName(name, toolType string) bool {
 		return false
 	}
 
-	if webSearchAliases[name] {
-		return true
-	}
-	if webSearchAliases[toolType] {
-		return true
-	}
-	// Also match any type starting with "web_search"
-	if strings.HasPrefix(toolType, "web_search") {
-		return true
+	for _, s := range []string{name, toolType} {
+		if strings.HasPrefix(s, "web_search") || strings.HasPrefix(s, "websearch") || strings.HasPrefix(s, "web-search") || s == "web search" {
+			return true
+		}
 	}
 	return false
 }

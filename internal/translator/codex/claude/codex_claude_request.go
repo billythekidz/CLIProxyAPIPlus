@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/thinking"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/websearch"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
@@ -243,10 +244,11 @@ func ConvertClaudeRequestToCodex(modelName string, inputRawJSON []byte, _ bool) 
 		shortMap := buildShortNameMap(names)
 		for i := 0; i < len(toolResults); i++ {
 			toolResult := toolResults[i]
-			// Special handling: map Claude web search tool to Codex web_search
-			if toolResult.Get("type").String() == "web_search_20250305" {
-				// Replace the tool content entirely with {"type":"web_search"}
-				template, _ = sjson.SetRawBytes(template, "tools.-1", []byte(`{"type":"web_search"}`))
+			// Strip web_search tool entirely — web search is handled
+			// at the copilot-openai layer via SERVER_TOOLS_REGISTRY, not by the backend.
+			tType := toolResult.Get("type").String()
+			tName := toolResult.Get("name").String()
+			if websearch.IsWebSearchToolName(tName, tType) {
 				continue
 			}
 			tool := []byte(toolResult.Raw)
